@@ -90,3 +90,13 @@ html.vscode-light {
   background: #f8f8f8;
   color-scheme: light;
 }
+
+/* Screenshots are taken with virtual time, where animations never advance. */
+html:not(.harness-animate) *,
+html:not(.harness-animate) *::before {
+  animation: none !important;
+  transition: none !important;
+}
+html:not(.harness-animate) .spinner {
+  animation: none !important;
+}

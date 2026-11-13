@@ -38,7 +38,7 @@ IDs map to milestones in `DEVELOPMENT_PLAN.md`: `R-00N` is Milestone N.
   robust stream parsing, cancellation, timeouts, bounded retries, mock
   server tests, and the streaming chat UI.
 - Priority: High
-- Status: pending
+- Status: done
 
 ### R-003
 - Title: Workspace discovery and context v1

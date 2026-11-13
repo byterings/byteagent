@@ -89,10 +89,29 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     return true;
   });
 
+  register(COMMANDS.newChat, async () => {
+    await view.reveal();
+    await controller.newChat();
+  });
+
+  register(COMMANDS.testConnection, async () => {
+    const { settings } = services.settings();
+    const profile = settings.providers.find((p) => p.id === settings.activeProvider);
+    if (!profile) {
+      await vscode.commands.executeCommand(COMMANDS.openSettings);
+      return false;
+    }
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `ByteAgent: testing ${profile.name}…` },
+      () => controller.testDraft(profile, undefined),
+    );
+    if (result.ok) void vscode.window.showInformationMessage(`ByteAgent: ${result.message}`);
+    else void vscode.window.showErrorMessage(`ByteAgent: ${result.message}`);
+    return result.ok;
+  });
+
   // Commands whose features arrive in later milestones still respond.
   const later: Array<[string, string]> = [
-    [COMMANDS.newChat, 'Chat'],
-    [COMMANDS.testConnection, 'Connection testing'],
     [COMMANDS.initProject, 'Project knowledge'],
     [COMMANDS.addSelectionToChat, 'Adding a selection to chat'],
   ];

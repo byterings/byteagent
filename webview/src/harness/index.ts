@@ -6,7 +6,7 @@ import './theme.css';
 const params = new URLSearchParams(window.location.hash.slice(1));
 // VS Code sets theme variables on <html> and the theme class on <body>.
 const themeClass = params.get('theme') === 'light' ? 'vscode-light' : 'vscode-dark';
-document.documentElement.className = themeClass;
+document.documentElement.className = params.get('anim') ? `${themeClass} harness-animate` : themeClass;
 document.body.className = themeClass;
 const width = params.get('width');
 if (width) document.documentElement.style.setProperty('--harness-width', `${width}px`);
@@ -43,10 +43,26 @@ void import('../main').then(async () => {
   // Scripted interactions: click=<selector>|<selector> and type=<selector>=<text>
   const wait = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
   await wait(150);
+  const typed = params.get('type');
+  if (typed) {
+    const el = document.querySelector<HTMLTextAreaElement>('.composer__input');
+    if (el) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+      setter?.call(el, typed);
+      el.setSelectionRange(typed.length, typed.length);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      await wait(300);
+    }
+  }
   for (const selector of (params.get('click') ?? '').split('|').filter(Boolean)) {
     const el = document.querySelector<HTMLElement>(selector);
     if (el) el.click();
     else console.warn(`harness: nothing matches ${selector}`);
     await wait(450);
+  }
+  const scroll = params.get('scroll');
+  if (scroll) {
+    const el = document.querySelector<HTMLElement>('.chat__scroll');
+    if (el) el.scrollTop = scroll === 'top' ? 0 : Number(scroll);
   }
 });

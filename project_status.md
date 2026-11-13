@@ -4,9 +4,10 @@ Actual implementation state, based on what exists in the repository and
 what was verified by running it.
 
 ## Current State
-Milestones 0 and 1 are complete. The extension builds, activates, stores
-provider profiles and API keys, and shows a provider settings screen. It
-cannot talk to a provider yet. Development happens on the `dev` branch.
+Milestones 0 to 2 are complete. The extension builds, activates, stores
+provider profiles and API keys, and holds a streamed chat with an
+OpenAI-compatible endpoint. It cannot read project files or propose
+changes yet. Development happens on the `dev` branch.
 
 Environment used for development: Node 20.19.5, npm 10.8.2, VS Code
 1.142.0, git 2.43.0, ripgrep 14.1.1, Linux.
@@ -79,20 +80,60 @@ Verification (2026-11-13):
 - Settings screen checked visually in headless Chrome through the UI
   harness, dark and light themes.
 
+### R-002 Provider contract and streaming chat
+- Status: done
+
+Files Changed:
+- src/providers/ (types, sse, openaiCompatible, factory)
+- src/agent/ (host, prompts, runtime)
+- src/chat/ (controller, sessionStore), src/commands/index.ts
+- src/config/secrets.ts, src/shared/tokens.ts
+- webview/src/ (ChatView, HistoryView, Composer, Items, markdown,
+  harness scenarios)
+- tests/mock/mockServer.ts, tests/unit/, tests/integration/,
+  tests/extension/chat.test.ts
+
+What Changed:
+- Provider-neutral contract and an OpenAI-compatible streaming adapter:
+  tool-call assembly, first-byte and idle timeouts, cancellation, bounded
+  retries, error mapping, parameter fallbacks, model listing.
+- Chat runtime with conversation history, stop, retry and usage display.
+- Chat sessions saved per workspace, with history.
+- Chat UI: streamed Markdown with highlighted code, composer with mode
+  and model menus, and the cards used by later milestones.
+- Secret reads now see the extension's own recent writes, because VS Code
+  secret storage returned a deleted key for a short time afterwards.
+
+Why:
+- Milestone 2 exit criteria.
+
+Verification (2026-11-13):
+- `npm run typecheck`: no errors.
+- `npm test`: 8 files, 111 tests passed. Provider tests run against the
+  local mock server and cover streaming, fragmented tool calls, malformed
+  and empty streams, HTTP error mapping, retries, timeouts, cancellation
+  and key redaction.
+- `npm run test:extension`: 13 tests passed in VS Code 1.142.0, including
+  prompt to streamed reply, stop, retry, connection test and model list.
+- Chat screens checked visually through the UI harness.
+
 Not verified:
-- "Test connection" and "Load models" buttons have no backend until R-002.
-- Four commands (new chat, test connection, project setup, add selection)
-  respond with a "not available yet" message until their milestones.
+- No request has been sent to a real provider. Behaviour against real
+  endpoints, including the `max_completion_tokens` and temperature
+  fallbacks, is untested.
+- The webview was exercised through its message protocol and the browser
+  harness, not by clicking inside VS Code.
+- Two commands (project setup, add selection) respond with a "not
+  available yet" message until their milestones.
 
 ---
 
 ## In Progress
-- R-002 Provider contract and streaming chat
+- R-003 Workspace discovery and context v1
 
 ---
 
 ## Pending
-- R-003 Workspace discovery and context v1
 - R-004 Safe patch proposals and diff review
 - R-005 Tool manager and verification
 - R-006 Adaptive execution policy

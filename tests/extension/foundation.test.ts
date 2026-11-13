@@ -1,7 +1,7 @@
 import * as assert from 'node:assert';
 import * as vscode from 'vscode';
 import type { HostMessage } from '../../src/shared/protocol';
-import { activate, EXTENSION_ID, resetSettings } from './helpers';
+import { activate, EXTENSION_ID, resetSettings, waitFor } from './helpers';
 
 describe('M1 foundation', () => {
   beforeEach(resetSettings);
@@ -90,10 +90,17 @@ describe('M1 foundation', () => {
       assert.ok(failed && failed.type === 'profileSaved' && !failed.ok);
       assert.deepStrictEqual(failed.errors.map((e) => e.field).sort(), ['baseUrl', 'model']);
     } finally {
+      posted.length = 0;
       await api.controller.handleMessage({ type: 'deleteProfile', id: 'local-test' });
       api.controller.detach();
     }
+    const toast = posted.find((m) => m.type === 'toast');
+    assert.strictEqual(toast, undefined, `deleting the profile reported: ${JSON.stringify(toast)}`);
+    const remaining = api.services.settings().settings.providers.map((p) => p.id);
+    assert.deepStrictEqual(remaining, [], 'profile removed from settings');
     assert.strictEqual(await api.services.secrets.getApiKey('local-test'), undefined, 'key deleted with profile');
+    // The underlying storage must agree once it has settled, not only our recent-write memory.
+    await waitFor(async () => (await api.services.context.secrets.get('byteagent.apiKey.local-test')) === undefined, 'secret removed from VS Code storage');
   });
 
   it('opens the chat view without errors', async () => {
