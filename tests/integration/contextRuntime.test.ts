@@ -56,7 +56,8 @@ describe('context in a run (Scenario A: read-only question)', () => {
     expect(context?.totalTokens).toBeGreaterThan(0);
     expect(events.of('changes')).toEqual([]);
     expect(events.of('plan')).toEqual([]);
-    expect(events.kinds).toEqual(['user', 'context', 'assistant']);
+    expect(events.kinds).toEqual(['user', 'classification', 'context', 'assistant']);
+    expect(events.of('classification')[0]).toMatchObject({ mode: 'quick', auto: true });
     // History keeps the question, not the file contents.
     expect(result.turn?.user).toBe('What does orderTotal do?');
   });
@@ -92,7 +93,7 @@ describe('context in a run (Scenario A: read-only question)', () => {
     server.enqueue({ type: 'text', text: 'ok' });
     const { events, runtime } = setup({ noWorkspace: true });
     await runtime.run(request('What does orderTotal do?'), new AbortController().signal);
-    expect(events.kinds).toEqual(['user', 'assistant']);
+    expect(events.kinds).toEqual(['user', 'classification', 'assistant']);
   });
 
   it('keeps the request inside a small context window', async () => {

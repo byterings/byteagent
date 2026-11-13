@@ -97,13 +97,29 @@ describe('tool loop: reading', () => {
     expect(results[2]).toMatch(/path is required/);
   });
 
-  it('stops after the step limit instead of looping forever', async () => {
+  it('stops at the step limit when the user pinned the mode', async () => {
+    server.respondWith(() => tools({ name: 'list_directory', arguments: {} }));
+    const { events, run } = setup();
+    const result = await run('loop', 'quick');
+    expect(result.status).toBe('completed');
+    expect(result.mode).toBe('quick');
+    expect(server.chatRequests).toHaveLength(STEP_LIMITS.quick);
+    expect(events.of('notice').at(-1)?.text).toMatch(/Stopped after 12 steps, the limit for Quick mode/);
+    expect(events.of('classification')).toHaveLength(1);
+  });
+
+  it('escalates a runaway task step by step and still stops at the final limit', async () => {
     server.respondWith(() => tools({ name: 'list_directory', arguments: {} }));
     const { events, run } = setup();
     const result = await run('loop');
-    expect(result.status).toBe('completed');
-    expect(server.chatRequests).toHaveLength(STEP_LIMITS.quick);
-    expect(events.of('notice').at(-1)?.text).toMatch(/Stopped after 12 steps/);
+    expect(result.mode).toBe('project');
+    expect(server.chatRequests).toHaveLength(STEP_LIMITS.project);
+    expect(events.of('classification').map((c) => [c.mode, c.escalatedFrom])).toEqual([
+      ['quick', undefined],
+      ['standard', 'quick'],
+      ['project', 'standard'],
+    ]);
+    expect(events.of('notice').at(-1)?.text).toMatch(/Stopped after 48 steps/);
   });
 
   it('drops old tool output to stay inside a small context window', async () => {

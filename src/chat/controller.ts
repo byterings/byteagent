@@ -4,6 +4,7 @@ import type { AgentEvents, AgentHost, CommandDecision, CommandRequest, Diagnosti
 import type { ChangeIO, ChangeSet, ReviewDecision } from '../changes/types';
 import { ChangeReviewService } from '../changes/vscodeReview';
 import { AgentRuntime } from '../agent/runtime';
+import { isOpen, MemoryTaskTracker, taskProgress, type TaskState, type TaskTracker } from '../agent/taskState';
 import { findActiveProfile, PROVIDER_PRESETS, type ProviderProfile } from '../config/settings';
 import { findFiles } from '../context/search';
 import { writeDefaultMode } from '../config/vscodeSettings';
@@ -61,6 +62,7 @@ export class ChatController implements AgentEvents, AgentHost {
   /** Questions waiting for the user's answer, by request id. */
   private readonly pending = new Map<string, (answer: unknown) => void>();
   private readonly review = new ChangeReviewService();
+  private tasks: TaskTracker = new MemoryTaskTracker();
   private readonly tools: ToolRegistry = createToolRegistry();
   readonly changeIO: ChangeIO = new VsCodeChangeIO(workspaceRoot);
 
@@ -122,7 +124,19 @@ export class ChatController implements AgentEvents, AgentHost {
       items: this.session.items,
       busy: this.busy,
       usage: this.session.usage,
-      tasks: [],
+      tasks: this.tasks
+        .list()
+        .filter(isOpen)
+        .slice(0, 20)
+        .map((task: TaskState) => ({
+          id: task.id,
+          title: task.title,
+          mode: task.mode,
+          status: task.status,
+          updatedAt: task.updatedAt,
+          stepsDone: taskProgress(task).done,
+          stepsTotal: taskProgress(task).total,
+        })),
       projectInitialized: false,
       editor: this.services.workspace.editorContext(),
     };
@@ -468,6 +482,7 @@ export class ChatController implements AgentEvents, AgentHost {
       logger: this.services.logger,
       workspace: index ? { index, ripgrepPath: workspace.ripgrepPath } : undefined,
       tools: this.tools,
+      tasks: this.tasks,
       limits: { defaultContextWindow: settings.defaultContextWindow, confirmBeforeSend: settings.confirmBeforeSend },
       redact: (text) => this.services.redactor.redact(text),
     });
@@ -483,9 +498,11 @@ export class ChatController implements AgentEvents, AgentHost {
           openFiles: workspace.openFiles(),
           projectFacts: await workspace.projectFacts(),
           projectRules: await workspace.projectRules(),
+          sessionId: session.id,
         },
         this.abort.signal,
       );
+      if (result.taskId) session.taskId = result.taskId;
       if (result.turn) {
         session.turns.push(result.turn);
         if (session.turns.length > MAX_TURNS) session.turns.splice(0, session.turns.length - MAX_TURNS);

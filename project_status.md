@@ -4,12 +4,12 @@ Actual implementation state, based on what exists in the repository and
 what was verified by running it.
 
 ## Current State
-Milestones 0 to 5 are complete. The extension holds a streamed chat with
-an OpenAI-compatible endpoint, sends a selected, budgeted set of workspace
-files, lets the model read and search the workspace, shows every proposed
-file change for review, runs commands only after separate approval, and
-ends each run with a summary built from recorded results. Every request
-still runs in Quick mode; automatic classification is next. Development
+Milestones 0 to 6 are complete. ByteAgent chats with an OpenAI-compatible
+endpoint, classifies each request as Quick, Standard or Project, sends a
+budgeted set of relevant files, reads and searches through tools, shows
+every file change for review, runs commands only after separate approval,
+and summarises each run from recorded results. Plans and tasks are held
+in memory only; persistent storage and onboarding are next. Development
 happens on the `dev` branch.
 
 Environment used for development: Node 20.19.5, npm 10.8.2, VS Code
@@ -285,15 +285,56 @@ Not verified:
 - Editor diagnostics depend on language extensions, which were disabled
   in the test instance.
 
+### R-006 Adaptive execution policy
+- Status: done
+
+Files Changed:
+- src/agent/ (classifier, taskState, runtime)
+- src/tools/ (builtin/updatePlan, types, index)
+- src/chat/controller.ts
+- tests/unit/ (classifier, taskState), tests/integration/modes.test.ts,
+  tests/extension/modes.test.ts
+
+What Changed:
+- Deterministic classifier returning mode, intent, scope, risk,
+  verification need, a heuristic confidence score and reasons.
+- Quick: few files, no plan tool, 12 steps. Standard: plan tool
+  available, 24 steps. Project: tracked task with goal, acceptance
+  criteria and steps, 48 steps, and a reminder if no plan is recorded.
+- Escalation from facts of the running task (files proposed, files read,
+  steps used), with the new mode's instructions and tools applied at once.
+- A mode chosen by the user is kept: no automatic escalation, and the
+  transcript says what ByteAgent would have picked.
+- Task state machine with validated transitions and plan updates.
+
+Why:
+- Milestone 6 exit criteria.
+
+Decision recorded: classification uses heuristics plus escalation only.
+Model-assisted classification was not added because nothing measured so
+far shows it would help.
+
+Verification (2026-11-13):
+- `npm run typecheck`: no errors.
+- `npm test`: 22 files, 476 tests passed, including a 45-request
+  classification table, escalation thresholds, and review, command
+  approval and blocked files checked in each of the three modes.
+- `npm run test:extension`: 43 tests passed in VS Code 1.142.0.
+
+Not verified:
+- The classifier was calibrated on English example requests written for
+  the tests. Accuracy on real user requests, and on other languages, is
+  unknown.
+- Tasks do not survive a restart yet (R-007).
+
 ---
 
 ## In Progress
-- R-006 Adaptive execution policy
+- R-007 Persistent project knowledge and onboarding
 
 ---
 
 ## Pending
-- R-007 Persistent project knowledge and onboarding
 - R-008 Indexing improvements (light)
 
 ---

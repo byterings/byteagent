@@ -1,4 +1,5 @@
 import type { AgentEvents, AgentHost } from '../agent/host';
+import type { PlanUpdate } from '../agent/taskState';
 import type { WorkspaceIndex } from '../context/workspaceIndex';
 import type { Logger } from '../shared/logger';
 import type { SchemaNode } from './schema';
@@ -10,8 +11,14 @@ import type { SchemaNode } from './schema';
  * - read: looks at allowed workspace content, changes nothing
  * - propose: prepares file changes that the user must approve
  * - execute: runs a command that the user must approve
+ * - plan: records the task plan; touches nothing in the workspace
  */
-export type PermissionClass = 'read' | 'propose' | 'execute';
+export type PermissionClass = 'read' | 'propose' | 'execute' | 'plan';
+
+/** Lets the plan tool update the current task without knowing how tasks are stored. */
+export interface PlanAccess {
+  update(update: PlanUpdate): { ok: boolean; problems: string[]; done: number; total: number };
+}
 
 export interface CommandRecord {
   command: string;
@@ -55,6 +62,8 @@ export interface ToolContext {
   record: RunRecord;
   logger: Logger;
   redact(text: string): string;
+  /** Present when the current mode tracks a plan. */
+  plan?: PlanAccess;
 }
 
 export interface ToolOutcome {

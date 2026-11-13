@@ -97,7 +97,7 @@ describe('M2 streaming chat', () => {
     server.enqueue({ type: 'text', text: 'recovered' });
     await api.controller.handleMessage({ type: 'retry' });
     await api.controller.whenIdle();
-    assert.deepStrictEqual(items().map((i) => i.kind).filter((k) => k !== 'context'), ['user', 'assistant']);
+    assert.deepStrictEqual(items().map((i) => i.kind).filter((k) => k !== 'context' && k !== 'classification'), ['user', 'assistant']);
     assert.ok(items().some((i) => i.kind === 'assistant' && i.text === 'recovered'));
   });
 

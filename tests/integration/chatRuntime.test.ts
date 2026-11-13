@@ -42,7 +42,7 @@ describe('chat runtime', () => {
     const result = await runtime.run(request('hello'), new AbortController().signal);
     expect(result.status).toBe('completed');
     expect(result.turn).toEqual({ user: 'hello', assistant: 'Streaming works as expected.' });
-    expect(events.kinds).toEqual(['user', 'assistant']);
+    expect(events.kinds).toEqual(['user', 'classification', 'assistant']);
     expect(events.of('assistant')[0]).toMatchObject({ text: 'Streaming works as expected.', streaming: false });
     expect(events.deltas).toBeGreaterThan(2);
     expect(events.usages.at(-1)).toEqual({ inputTokens: 30, outputTokens: 6, estimated: false });

@@ -70,7 +70,7 @@ IDs map to milestones in `DEVELOPMENT_PLAN.md`: `R-00N` is Milestone N.
 - Description: Deterministic task classifier, Quick, Standard and Project
   workflows, escalation, user override without safety bypass.
 - Priority: Medium
-- Status: pending
+- Status: done
 
 ### R-007
 - Title: Persistent project knowledge and onboarding

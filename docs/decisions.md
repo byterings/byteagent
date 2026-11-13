@@ -105,3 +105,22 @@ material decision is made. Do not rewrite old entries; supersede them.
 - Date: 2026-11-13
 - Decision: `main` holds released states. Development happens on `dev`
   with a commit after each coherent change.
+
+## D-014: Heuristic classification, no model-assisted step
+
+- Date: 2026-11-13
+- Decision: Tasks are classified by deterministic rules, and the mode is
+  raised during a run when recorded facts (files proposed, files read,
+  steps used) show the work is larger than assumed.
+- Reason: Rules are testable, cost nothing and cannot be talked out of
+  their answer. A model-assisted classifier would add a paid request to
+  every prompt; add one only if measured misclassification justifies it.
+
+## D-015: Clean files are written to disk, unsaved files through the editor
+
+- Date: 2026-11-13
+- Decision: An approved change to a file with unsaved edits is applied
+  through the editor and saved. Any other file is written to disk and
+  VS Code reloads it.
+- Reason: VS Code's in-memory copy of a clean file can lag behind the
+  disk, and saving it would conflict with the newer file.

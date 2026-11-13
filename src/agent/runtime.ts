@@ -2,15 +2,17 @@ import { buildContext, computeContextBudget, type ContextPackage } from '../cont
 import type { WorkspaceIndex } from '../context/workspaceIndex';
 import type { ChatMessage, FinishReason, Provider, ToolCall, ToolSpec } from '../providers/types';
 import { describeError, isCancellation, ProviderError } from '../shared/errors';
-import { newId } from '../shared/hash';
+import { ABSENT_HASH, newId } from '../shared/hash';
 import type { Logger } from '../shared/logger';
 import type { Attachment, ExecutionMode, ModeSetting } from '../shared/protocol';
 import { estimateMessagesTokens, estimateTokens } from '../shared/tokens';
 import type { ToolRegistry } from '../tools/registry';
-import { newRunRecord, type PermissionClass, type RunRecord, type ToolContext } from '../tools/types';
+import { newRunRecord, type PermissionClass, type PlanAccess, type RunRecord, type ToolContext } from '../tools/types';
+import { checkEscalation, classifyTask } from './classifier';
 import type { AgentEvents, AgentHost, DiagnosticSummary, Turn } from './host';
 import { buildOutcome } from './outcome';
 import { buildSystemPrompt } from './prompts';
+import { applyPlanUpdate, canTransition, newTask, statusAfterRun, taskProgress, transition, type TaskState, type TaskTracker } from './taskState';
 import { parseTextToolCalls, toolInstructions, toTextProtocol } from './textTools';
 
 export interface RunRequest {
@@ -25,6 +27,9 @@ export interface RunRequest {
   projectFacts?: string;
   /** Developer-written rules for agents. */
   projectRules?: string;
+  sessionId?: string;
+  /** Continue this saved task instead of starting from the prompt alone. */
+  resumeTask?: TaskState;
 }
 
 export interface RunResult {
@@ -35,6 +40,10 @@ export interface RunResult {
   errorCode?: string;
   /** What was recorded during the run. */
   record: RunRecord;
+  /** The mode the run ended in, after any escalation. */
+  mode: ExecutionMode;
+  /** Set when the run created or continued a tracked task. */
+  taskId?: string;
 }
 
 export interface WorkspaceAccess {
@@ -60,6 +69,8 @@ export interface RuntimeDeps {
   tools?: ToolRegistry;
   limits: RuntimeLimits;
   redact?: (text: string) => string;
+  /** Where tracked tasks are saved. */
+  tasks?: TaskTracker;
 }
 
 /** How much earlier conversation is replayed to the model, newest first. */
@@ -92,10 +103,10 @@ export class AgentRuntime {
   constructor(private readonly deps: RuntimeDeps) {}
 
   async run(request: RunRequest, signal: AbortSignal): Promise<RunResult> {
-    const { provider, events, logger, workspace } = this.deps;
-    const mode: ExecutionMode = request.mode === 'auto' ? 'quick' : request.mode;
+    const { provider, events, logger, workspace, tasks } = this.deps;
     const record = newRunRecord();
     const spoken: string[] = [];
+    const redact = this.deps.redact ?? ((text: string) => text);
 
     events.add({
       kind: 'user',
@@ -105,39 +116,128 @@ export class AgentRuntime {
       mode: request.mode,
     });
 
+    // ── Decide how deep to go ───────────────────────────────────────────
+    const resuming = request.resumeTask;
+    const classification = classifyTask({ prompt: resuming ? resuming.goal : request.prompt, attachments: request.attachments, setting: resuming ? resuming.mode : request.mode });
+    let mode: ExecutionMode = classification.mode;
+    events.add({
+      kind: 'classification',
+      id: newId('m'),
+      mode,
+      auto: classification.source === 'heuristic',
+      reasons: resuming ? ['Continuing a saved task'] : classification.reasons,
+      confidence: classification.confidence,
+    });
+    // A mode the user picked is not changed behind their back.
+    const mayEscalate = classification.source === 'heuristic' && !resuming;
+
     const registry = workspace ? this.deps.tools : undefined;
-    const allowed: ReadonlySet<PermissionClass> = new Set<PermissionClass>(['read', 'propose', 'execute']);
-    const toolSpecs = registry ? registry.specs(allowed) : [];
+    const allowedFor = (m: ExecutionMode): ReadonlySet<PermissionClass> =>
+      new Set<PermissionClass>(m === 'quick' ? ['read', 'propose', 'execute'] : ['read', 'propose', 'execute', 'plan']);
+    let allowed = allowedFor(mode);
+    let toolSpecs = registry ? registry.specs(allowed) : [];
     this.useTextTools = toolSpecs.length > 0 && provider.getCapabilities().toolCalling === 'none';
 
-    const basePrompt = buildSystemPrompt({
-      mode,
-      workspaceName: request.workspaceName,
-      toolNames: toolSpecs.map((t) => t.name),
-      projectFacts: request.projectFacts,
-      projectRules: request.projectRules,
-    });
-    const history = historyMessages(request.history, HISTORY_TOKEN_BUDGET);
+    const systemPrompt = (): string =>
+      buildSystemPrompt({
+        mode,
+        workspaceName: request.workspaceName,
+        toolNames: toolSpecs.map((t) => t.name),
+        projectFacts: request.projectFacts,
+        projectRules: request.projectRules,
+      });
+    const history = resuming ? [] : historyMessages(request.history, HISTORY_TOKEN_BUDGET);
 
-    const finish = (status: RunResult['status'], errorCode?: string): RunResult => {
+    // ── Task tracking (Project mode) ────────────────────────────────────
+    let task: TaskState | undefined = resuming ? { ...resuming } : undefined;
+    let planItemId: string | undefined;
+    const showPlan = (): void => {
+      if (!task || task.steps.length === 0) return;
+      const view = { taskId: task.id, goal: task.title, steps: task.steps.map((s) => ({ ...s })), criteria: [...task.criteria] };
+      if (planItemId) events.update(planItemId, view);
+      else {
+        planItemId = newId('p');
+        events.add({ kind: 'plan', id: planItemId, ...view });
+      }
+    };
+    const startTask = (): void => {
+      if (task || !registry) return;
+      task = newTask({ goal: request.prompt, mode, sessionId: request.sessionId });
+      tasks?.save(task);
+    };
+    if (mode === 'project') startTask();
+    if (task && resuming) {
+      if (task.status !== 'in_progress' && canTransition(task.status, 'in_progress')) task = transition(task, 'in_progress');
+      tasks?.save(task);
+      showPlan();
+    }
+
+    const plan: PlanAccess = {
+      update: (update) => {
+        // Standard mode may keep a plan too; it becomes a task when it does.
+        if (!task) {
+          task = newTask({ goal: request.prompt, mode, sessionId: request.sessionId });
+        }
+        const applied = applyPlanUpdate(task, update);
+        const changed = applied.task !== task;
+        if (changed) {
+          task = applied.task;
+          if (update.goal && update.goal.trim()) task = { ...task, title: update.goal.trim().slice(0, 70) };
+          tasks?.save(task);
+          showPlan();
+        }
+        const progress = taskProgress(task);
+        return { ok: changed, problems: applied.problems, ...progress };
+      },
+    };
+
+    const finish = async (status: RunResult['status'], errorCode?: string): Promise<RunResult> => {
       const assistantText = spoken.join('\n\n').trim();
       const notes = summarizeRecord(record);
+      if (task) {
+        if (notes) task = { ...task, notes: [...task.notes, notes].slice(-20) };
+        const next = statusAfterRun(task, status);
+        if (canTransition(task.status, next)) task = transition(task, next);
+        tasks?.save(task);
+        if (planItemId && task.status === 'paused' && taskProgress(task).total > 0) {
+          const { done, total } = taskProgress(task);
+          events.add({ kind: 'notice', id: newId('n'), level: 'info', text: `Task saved with ${done} of ${total} steps done. You can resume it from History.` });
+        }
+      }
       const remembered = assistantText || notes;
       return {
         status,
         assistantText,
         errorCode,
         record,
+        mode,
+        taskId: task?.id,
         turn: remembered
           ? { user: request.prompt, assistant: assistantText + (status === 'cancelled' ? '\n[stopped by the user]' : ''), notes: notes || undefined }
           : undefined,
       };
     };
 
+    // ── Context ─────────────────────────────────────────────────────────
+    let brief = '';
+    if (resuming && workspace) {
+      const changed = await changedSince(workspace.index, resuming.files);
+      brief = resumeBrief(resuming, changed);
+      if (changed.length > 0) {
+        events.add({
+          kind: 'notice',
+          id: newId('n'),
+          level: 'warn',
+          text: `Changed since this task last touched ${changed.length === 1 ? 'it' : 'them'}: ${changed.join(', ')}. ByteAgent will read ${changed.length === 1 ? 'it' : 'them'} again.`,
+        });
+      }
+    } else if (resuming) brief = resumeBrief(resuming, []);
+
     let context: ContextPackage | undefined | null;
     try {
-      const fixed = estimateTokens(basePrompt) + estimateMessagesTokens(history) + estimateTokens(request.prompt) + estimateTokens(JSON.stringify(toolSpecs));
-      context = await this.gatherContext(request, mode, fixed, signal);
+      const basis = resuming ? `${resuming.goal}\n${resuming.steps.find((st) => st.status !== 'done' && st.status !== 'skipped')?.title ?? ''}` : request.prompt;
+      const fixed = estimateTokens(systemPrompt()) + estimateMessagesTokens(history) + estimateTokens(request.prompt) + estimateTokens(brief) + estimateTokens(JSON.stringify(toolSpecs));
+      context = await this.gatherContext({ ...request, prompt: basis }, mode, fixed, signal);
     } catch (err) {
       if (isCancellation(err)) {
         events.add({ kind: 'notice', id: newId('n'), level: 'info', text: 'Stopped.' });
@@ -150,24 +250,32 @@ export class AgentRuntime {
       return finish('cancelled');
     }
 
-    const userContent = context?.rendered ? `${context.rendered}\n\nUser request:\n${request.prompt}` : request.prompt;
-    const messages: ChatMessage[] = [{ role: 'system', content: basePrompt }, ...history, { role: 'user', content: userContent }];
+    const parts: string[] = [];
+    if (context?.rendered) parts.push(context.rendered);
+    if (brief) parts.push(brief);
+    parts.push(parts.length > 0 ? `User request:\n${request.prompt}` : request.prompt);
+    const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt() }, ...history, { role: 'user', content: parts.join('\n\n') }];
 
     const toolContext: ToolContext | undefined =
       registry && workspace
-        ? {
-            index: workspace.index,
-            ripgrepPath: workspace.ripgrepPath,
-            signal,
-            host: this.deps.host,
-            events,
-            record,
-            logger,
-            redact: this.deps.redact ?? ((text) => text),
-          }
+        ? { index: workspace.index, ripgrepPath: workspace.ripgrepPath, signal, host: this.deps.host, events, record, logger, redact, plan }
         : undefined;
 
-    const maxSteps = STEP_LIMITS[mode];
+    /** Records which files the task changed, with their current hash. */
+    const syncTaskFiles = async (): Promise<void> => {
+      if (!task || !workspace) return;
+      let changed = false;
+      for (const path of new Set(record.applied)) {
+        const hash = await workspace.index.currentHash(path).catch(() => undefined);
+        if (hash && task.files[path] !== hash) {
+          task = { ...task, files: { ...task.files, [path]: hash }, updatedAt: Date.now() };
+          changed = true;
+        }
+      }
+      if (changed) tasks?.save(task);
+    };
+
+    let planReminderSent = false;
     try {
       for (let step = 1; ; step++) {
         this.fitMessages(messages);
@@ -196,13 +304,40 @@ export class AgentRuntime {
         if (result.parseErrors.length > 0) {
           messages.push({ role: 'user', content: `Problem with your tool call:\n- ${result.parseErrors.join('\n- ')}` });
         }
+        await syncTaskFiles();
 
-        if (step >= maxSteps) {
+        // ── Escalate when the work has outgrown its mode ──────────────────
+        if (mayEscalate) {
+          const proposed = [...record.applied, ...record.rejected, ...record.stale, ...record.failed.map((f) => f.path)];
+          const escalation = checkEscalation(mode, { filesProposed: proposed, steps: step, filesRead: record.filesRead.size });
+          if (escalation) {
+            const from = mode;
+            mode = escalation.to;
+            allowed = allowedFor(mode);
+            toolSpecs = registry.specs(allowed);
+            messages[0] = { role: 'system', content: systemPrompt() };
+            events.add({ kind: 'classification', id: newId('m'), mode, auto: true, reasons: [escalation.reason], confidence: 1, escalatedFrom: from });
+            if (mode === 'project') startTask();
+            if (task) {
+              task = { ...task, mode };
+              tasks?.save(task);
+            }
+            messages.push({ role: 'user', content: escalationNote(mode, escalation.reason) });
+            logger.info(`Escalated from ${from} to ${mode}: ${escalation.reason}`);
+          }
+        }
+
+        if (mode === 'project' && !planReminderSent && step >= 3 && (!task || task.steps.length === 0)) {
+          planReminderSent = true;
+          messages.push({ role: 'user', content: '[ByteAgent] This is a Project task and no plan has been recorded yet. Call update_plan now with the goal, acceptance criteria and ordered steps, then continue.' });
+        }
+
+        if (step >= STEP_LIMITS[mode]) {
           events.add({
             kind: 'notice',
             id: newId('n'),
             level: 'warn',
-            text: `Stopped after ${maxSteps} steps, the limit for this mode. Send a follow-up message to continue.`,
+            text: `Stopped after ${STEP_LIMITS[mode]} steps, the limit for ${mode[0]?.toUpperCase()}${mode.slice(1)} mode. Send a follow-up message to continue.`,
           });
           break;
         }
@@ -217,6 +352,7 @@ export class AgentRuntime {
       // What the user already saw stays part of the conversation.
       if (this.partialText.trim()) spoken.push(this.partialText.trim());
       this.partialText = '';
+      await syncTaskFiles().catch(() => undefined);
       if (isCancellation(err)) {
         events.add({ kind: 'notice', id: newId('n'), level: 'info', text: 'Stopped.' });
         await this.reportOutcome(record);
@@ -227,10 +363,10 @@ export class AgentRuntime {
       events.add({
         kind: 'error',
         id: newId('e'),
-        message: (this.deps.redact ?? ((t: string) => t))(describeError(err)),
+        message: redact(describeError(err)),
         code,
         // Retrying would repeat work that already changed files.
-        canRetry: record.applied.length === 0 && record.commands.length === 0,
+        canRetry: record.applied.length === 0 && record.commands.length === 0 && !resuming,
         openSettings: code === 'auth' || code === 'not_found' || code === 'network',
       });
       await this.reportOutcome(record);
@@ -399,6 +535,50 @@ export class AgentRuntime {
     }
     return pkg;
   }
+}
+
+function escalationNote(mode: ExecutionMode, reason: string): string {
+  const label = `${mode[0]?.toUpperCase()}${mode.slice(1)}`;
+  if (mode === 'project') {
+    return `[ByteAgent] This task is larger than it first looked (${reason.toLowerCase()}). It is now a ${label} task. Call update_plan with the goal, acceptance criteria and ordered steps, including what is already done, then continue one step at a time and verify at milestones.`;
+  }
+  return `[ByteAgent] This task is larger than it first looked (${reason.toLowerCase()}). It is now a ${label} task. State a short plan, inspect the related files, and run a focused check after the changes are applied.`;
+}
+
+/** Files whose content no longer matches what the task recorded. */
+export async function changedSince(index: WorkspaceIndex, files: Record<string, string>): Promise<string[]> {
+  const changed: string[] = [];
+  for (const [path, hash] of Object.entries(files)) {
+    let current: string;
+    try {
+      current = await index.currentHash(path);
+    } catch {
+      current = ABSENT_HASH;
+    }
+    if (current !== hash) changed.push(path);
+  }
+  return changed.sort();
+}
+
+/**
+ * Everything a model needs to continue a saved task, built from stored
+ * state. It does not depend on any earlier conversation, so a different
+ * provider can pick the task up.
+ */
+export function resumeBrief(task: TaskState, changedFiles: string[]): string {
+  const lines: string[] = ['You are continuing a saved task. This summary comes from recorded state, not from memory of an earlier conversation.', '', `Original request:\n${task.goal}`];
+  if (task.criteria.length > 0) lines.push('', 'Acceptance criteria:', ...task.criteria.map((c) => `- ${c}`));
+  if (task.steps.length > 0) {
+    lines.push('', 'Plan and progress:', ...task.steps.map((s) => `- [${s.status}] (${s.id}) ${s.title}`));
+  } else lines.push('', 'No plan was recorded yet.');
+  if (task.notes.length > 0) lines.push('', 'Recorded results of earlier work:', ...task.notes.slice(-8).map((n) => n.split('\n').map((l) => `- ${l}`).join('\n')));
+  const touched = Object.keys(task.files);
+  if (touched.length > 0) lines.push('', `Files this task has changed so far: ${touched.join(', ')}`);
+  if (changedFiles.length > 0) {
+    lines.push('', `These files were modified or removed by someone else since then: ${changedFiles.join(', ')}. Read them again before building on them.`);
+  }
+  lines.push('', 'Check the current state of the files you need, then continue with the first step that is not done. Keep the plan up to date with update_plan.');
+  return lines.join('\n');
 }
 
 /** A short factual record of a run, kept with the conversation history. */
