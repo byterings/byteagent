@@ -11,6 +11,15 @@ export interface AgentEvents {
   usage(usage: UsageView): void;
 }
 
+/**
+ * Everything the runtime needs from a human or the editor. Approval is the
+ * return value of these calls, so there is no path that skips it.
+ */
+export interface AgentHost {
+  /** Asks the user to confirm the context shown in the given transcript item. */
+  confirmContext(requestId: string, signal: AbortSignal): Promise<boolean>;
+}
+
 /** One completed exchange, kept so later prompts have conversation context. */
 export interface Turn {
   user: string;

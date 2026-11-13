@@ -46,7 +46,7 @@ IDs map to milestones in `DEVELOPMENT_PLAN.md`: `R-00N` is Milestone N.
   technology detection, search, bounded file reads, content hashes,
   relevance ranking, token-budgeted context package with omitted items.
 - Priority: High
-- Status: pending
+- Status: done
 
 ### R-004
 - Title: Safe patch proposals and diff review

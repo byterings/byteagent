@@ -16,7 +16,16 @@ afterEach(() => server.reset());
 function setup() {
   const events = new RecordingEvents();
   const provider = createProvider({ id: 'mock', baseUrl, model: 'mock-model', timeoutSeconds: 5 }, { retryBaseDelayMs: 5 });
-  return { events, runtime: new AgentRuntime({ provider, events, logger: nullLogger }) };
+  return {
+    events,
+    runtime: new AgentRuntime({
+      provider,
+      events,
+      host: { confirmContext: async () => true },
+      logger: nullLogger,
+      limits: { defaultContextWindow: 32000, confirmBeforeSend: false },
+    }),
+  };
 }
 
 const request = (prompt: string, history: Array<{ user: string; assistant: string }> = []) => ({

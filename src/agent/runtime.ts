@@ -1,10 +1,12 @@
+import { buildContext, computeContextBudget, type ContextPackage } from '../context/contextBuilder';
+import type { WorkspaceIndex } from '../context/workspaceIndex';
 import type { Provider, ChatMessage } from '../providers/types';
 import { describeError, isCancellation, ProviderError } from '../shared/errors';
 import { newId } from '../shared/hash';
 import type { Logger } from '../shared/logger';
 import type { Attachment, ExecutionMode, ModeSetting } from '../shared/protocol';
 import { estimateMessagesTokens, estimateTokens } from '../shared/tokens';
-import type { AgentEvents, Turn } from './host';
+import type { AgentEvents, AgentHost, Turn } from './host';
 import { buildSystemPrompt } from './prompts';
 
 export interface RunRequest {
@@ -13,6 +15,12 @@ export interface RunRequest {
   mode: ModeSetting;
   history: Turn[];
   workspaceName?: string;
+  activeFile?: string;
+  openFiles?: string[];
+  /** Detected stack summary for the system prompt. */
+  projectFacts?: string;
+  /** Developer-written rules for agents. */
+  projectRules?: string;
 }
 
 export interface RunResult {
@@ -23,10 +31,26 @@ export interface RunResult {
   errorCode?: string;
 }
 
+export interface WorkspaceAccess {
+  index: WorkspaceIndex;
+  ripgrepPath?: string;
+}
+
+export interface RuntimeLimits {
+  /** Context window assumed when the provider does not state one. */
+  defaultContextWindow: number;
+  /** Ask the user before each request leaves the machine. */
+  confirmBeforeSend: boolean;
+}
+
 export interface RuntimeDeps {
   provider: Provider;
   events: AgentEvents;
+  host: AgentHost;
   logger: Logger;
+  /** Absent when no folder is open: the agent then only chats. */
+  workspace?: WorkspaceAccess;
+  limits: RuntimeLimits;
 }
 
 /** How much earlier conversation is replayed to the model, newest first. */
@@ -51,11 +75,32 @@ export class AgentRuntime {
       mode: request.mode,
     });
 
-    const messages: ChatMessage[] = [
-      { role: 'system', content: buildSystemPrompt({ mode, workspaceName: request.workspaceName, toolNames: [] }) },
-      ...historyMessages(request.history, HISTORY_TOKEN_BUDGET),
-      { role: 'user', content: request.prompt },
-    ];
+    const systemPrompt = buildSystemPrompt({
+      mode,
+      workspaceName: request.workspaceName,
+      toolNames: [],
+      projectFacts: request.projectFacts,
+      projectRules: request.projectRules,
+    });
+    const history = historyMessages(request.history, HISTORY_TOKEN_BUDGET);
+
+    let context: ContextPackage | undefined | null;
+    try {
+      context = await this.gatherContext(request, mode, estimateTokens(systemPrompt) + estimateMessagesTokens(history) + estimateTokens(request.prompt), signal);
+    } catch (err) {
+      if (isCancellation(err)) {
+        events.add({ kind: 'notice', id: newId('n'), level: 'info', text: 'Stopped.' });
+        return { status: 'cancelled', assistantText: '' };
+      }
+      logger.warn('Context selection failed; continuing without project files', err);
+    }
+    if (context === null) {
+      events.add({ kind: 'notice', id: newId('n'), level: 'info', text: 'Nothing was sent.' });
+      return { status: 'cancelled', assistantText: '' };
+    }
+
+    const userContent = context?.rendered ? `${context.rendered}\n\nUser request:\n${request.prompt}` : request.prompt;
+    const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: userContent }];
 
     const assistantId = newId('a');
     events.add({ kind: 'assistant', id: assistantId, text: '', streaming: true });
@@ -107,6 +152,68 @@ export class AgentRuntime {
       });
       return { status: 'failed', assistantText: text, errorCode: code };
     }
+  }
+
+  /**
+   * Selects project files for the request and shows the selection. Returns
+   * undefined when there is no workspace, and null when the user declined
+   * to send.
+   */
+  private async gatherContext(
+    request: RunRequest,
+    mode: ExecutionMode,
+    fixedTokens: number,
+    signal: AbortSignal,
+  ): Promise<ContextPackage | undefined | null> {
+    const { provider, events, host, workspace, limits } = this.deps;
+    if (!workspace) return undefined;
+
+    const capabilities = provider.getCapabilities();
+    const budgetTokens = computeContextBudget({
+      contextWindow: capabilities.contextWindow ?? limits.defaultContextWindow,
+      maxOutputTokens: capabilities.maxOutputTokens,
+      fixedTokens,
+      mode,
+    });
+    const pkg = await buildContext(workspace.index, {
+      prompt: request.prompt,
+      attachments: request.attachments,
+      activeFile: request.activeFile,
+      openFiles: request.openFiles,
+      mode,
+      budgetTokens,
+      ripgrepPath: workspace.ripgrepPath,
+      signal,
+    });
+
+    const itemId = newId('x');
+    const requestId = newId('q');
+    events.add({
+      kind: 'context',
+      id: itemId,
+      files: pkg.files.map((f) => {
+        const partial = f.startLine > 1 || f.endLine < f.totalLines;
+        return {
+          path: f.path,
+          reason: f.reason,
+          tokens: f.tokens,
+          truncated: f.truncated || undefined,
+          startLine: partial ? f.startLine : undefined,
+          endLine: partial ? f.endLine : undefined,
+        };
+      }),
+      omitted: pkg.omitted,
+      totalTokens: pkg.totalTokens,
+      budget: pkg.budget,
+      confirm: limits.confirmBeforeSend ? { requestId, status: 'pending' } : undefined,
+    });
+
+    if (limits.confirmBeforeSend) {
+      const send = await host.confirmContext(requestId, signal);
+      events.update(itemId, { confirm: { requestId, status: send ? 'sent' : 'cancelled' } });
+      if (!send) return null;
+    }
+    return pkg;
   }
 }
 

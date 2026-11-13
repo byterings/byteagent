@@ -6,6 +6,7 @@ import { readSettings, writeProviders } from '../config/vscodeSettings';
 import type { Logger } from '../shared/logger';
 import { Redactor } from '../shared/redact';
 import { createChannelLogger } from '../shared/vscodeLogger';
+import { WorkspaceService } from './workspaceService';
 
 /** Long-lived objects shared by commands and the chat controller. */
 export interface Services {
@@ -15,6 +16,7 @@ export interface Services {
   logChannel: vscode.OutputChannel;
   secrets: SecretStore;
   profiles: ProfileManager;
+  workspace: WorkspaceService;
   settings(): ParsedSettings;
 }
 
@@ -35,15 +37,19 @@ export function createServices(context: vscode.ExtensionContext): Services {
     deleteApiKey: (id) => secrets.deleteApiKey(id),
   };
 
-  return {
+  const services: Services = {
     context,
     redactor,
     logger,
     logChannel: channel,
     secrets,
     profiles: new ProfileManager(backend),
+    workspace: undefined as unknown as WorkspaceService,
     settings: readSettings,
   };
+  services.workspace = new WorkspaceService(services);
+  context.subscriptions.push(services.workspace);
+  return services;
 }
 
 /** The first workspace folder on the local file system, if any. */

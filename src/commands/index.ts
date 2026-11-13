@@ -110,10 +110,16 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     return result.ok;
   });
 
+  register(COMMANDS.addSelectionToChat, async () => {
+    await view.reveal();
+    if (!controller.addSelectionToChat()) {
+      void vscode.window.showInformationMessage('ByteAgent: open a file in this workspace first. Files excluded from ByteAgent cannot be added.');
+    }
+  });
+
   // Commands whose features arrive in later milestones still respond.
   const later: Array<[string, string]> = [
     [COMMANDS.initProject, 'Project knowledge'],
-    [COMMANDS.addSelectionToChat, 'Adding a selection to chat'],
   ];
   for (const [id, feature] of later) {
     register(id, () => {

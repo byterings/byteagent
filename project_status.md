@@ -4,10 +4,11 @@ Actual implementation state, based on what exists in the repository and
 what was verified by running it.
 
 ## Current State
-Milestones 0 to 2 are complete. The extension builds, activates, stores
-provider profiles and API keys, and holds a streamed chat with an
-OpenAI-compatible endpoint. It cannot read project files or propose
-changes yet. Development happens on the `dev` branch.
+Milestones 0 to 3 are complete. The extension builds, activates, stores
+provider profiles and API keys, holds a streamed chat with an
+OpenAI-compatible endpoint, and sends a selected, budgeted set of
+workspace files with each request. It cannot propose changes or run
+tools yet. Development happens on the `dev` branch.
 
 Environment used for development: Node 20.19.5, npm 10.8.2, VS Code
 1.142.0, git 2.43.0, ripgrep 14.1.1, Linux.
@@ -123,18 +124,65 @@ Not verified:
   fallbacks, is untested.
 - The webview was exercised through its message protocol and the browser
   harness, not by clicking inside VS Code.
-- Two commands (project setup, add selection) respond with a "not
-  available yet" message until their milestones.
+- One command (project setup) responds with a "not available yet"
+  message until its milestone.
+
+### R-003 Workspace discovery and context v1
+- Status: done
+
+Files Changed:
+- src/context/ (paths, ignore, workspaceIndex, search, techDetect,
+  ranker, contextBuilder)
+- src/chat/workspaceService.ts, src/chat/controller.ts,
+  src/chat/services.ts, src/commands/index.ts
+- src/agent/runtime.ts, src/agent/host.ts
+- tests/helpers/tempWorkspace.ts, tests/unit/ (ignore, workspaceIndex,
+  search, context), tests/integration/contextRuntime.test.ts,
+  tests/extension/context.test.ts
+
+What Changed:
+- Exclusion policy: `.gitignore` (root and nested, with negation),
+  settings exclusions, dependency folders and built-in sensitive-file
+  rules. One policy serves scanning, search, reads and suggestions.
+- Workspace index: scan with limits, safe path resolution (no `..`, no
+  outside paths, no escaping symlinks), binary and size checks, content
+  hashes, cache revalidated on every read, unsaved editor text preferred.
+- Search through ripgrep when available with an in-process fallback;
+  both return only indexed files.
+- Technology detection from manifests.
+- Relevance ranking with recorded reasons, and a context package bound
+  by a token budget that lists what was left out and why.
+- Chat shows the files sent with each request, supports `@` file
+  mentions, the current file or selection, and optional confirmation
+  before sending.
+
+Why:
+- Milestone 3 exit criteria.
+
+Verification (2026-11-13):
+- `npm run typecheck`: no errors.
+- `npm test`: 13 files, 185 tests passed. Covered: exclusions, path
+  escapes, symlinks, size and binary handling, cache invalidation on file
+  change, both search engines returning nothing from blocked files,
+  ranking, truncation, token budgeting, blocked attachments reported.
+- `npm run test:extension`: 19 tests passed, including unsaved editor
+  text used as context, `.env` never offered or sent, and confirmation
+  before send.
+
+Not verified:
+- Token counts are estimates (deliberately high), not a real tokenizer.
+- Ranking quality was checked on small fixture projects only, not on a
+  large real repository.
+- Multi-root workspaces: only the first folder is used.
 
 ---
 
 ## In Progress
-- R-003 Workspace discovery and context v1
+- R-004 Safe patch proposals and diff review
 
 ---
 
 ## Pending
-- R-004 Safe patch proposals and diff review
 - R-005 Tool manager and verification
 - R-006 Adaptive execution policy
 - R-007 Persistent project knowledge and onboarding

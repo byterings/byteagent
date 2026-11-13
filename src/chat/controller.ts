@@ -1,8 +1,9 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { AgentEvents } from '../agent/host';
+import type { AgentEvents, AgentHost } from '../agent/host';
 import { AgentRuntime } from '../agent/runtime';
 import { findActiveProfile, PROVIDER_PRESETS, type ProviderProfile } from '../config/settings';
+import { findFiles } from '../context/search';
 import { writeDefaultMode } from '../config/vscodeSettings';
 import { createProvider } from '../providers/factory';
 import type { Provider } from '../providers/types';
@@ -38,7 +39,7 @@ const DELTA_FLUSH_MS = 24;
  * Bridges the webview and the rest of the extension. All webview messages
  * arrive here; all state the webview shows is produced here.
  */
-export class ChatController implements AgentEvents {
+export class ChatController implements AgentEvents, AgentHost {
   private poster: Poster | undefined;
   private pendingView: ViewName | undefined;
   private readonly sessions: SessionStore;
@@ -51,11 +52,14 @@ export class ChatController implements AgentEvents {
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   /** Resolves when the current run has fully finished. Used by tests. */
   private runPromise: Promise<void> = Promise.resolve();
+  /** Questions waiting for the user's answer, by request id. */
+  private readonly pending = new Map<string, (answer: unknown) => void>();
 
   constructor(private readonly services: Services) {
     this.sessions = new SessionStore(services.context.workspaceState);
     const latest = this.sessions.list()[0];
     this.session = (latest && this.sessions.get(latest.id)) || this.sessions.create();
+    services.workspace.onEditorChanged = (editor) => this.post({ type: 'editorContext', editor });
   }
 
   // ───────────────────────── webview plumbing ─────────────────────────
@@ -110,7 +114,7 @@ export class ChatController implements AgentEvents {
       usage: this.session.usage,
       tasks: [],
       projectInitialized: false,
-      editor: {},
+      editor: this.services.workspace.editorContext(),
     };
   }
 
@@ -159,6 +163,46 @@ export class ChatController implements AgentEvents {
       this.post({ type: 'textDelta', sessionId: this.session.id, id, delta });
     }
     this.pendingText.clear();
+  }
+
+  // ───────────────────────── AgentHost ─────────────────────────
+
+  /**
+   * Waits for the webview to answer a request. Stopping the run answers
+   * with `fallback`, which is always the safe choice (do nothing).
+   */
+  private ask<T>(requestId: string, signal: AbortSignal, fallback: T): Promise<T> {
+    return new Promise<T>((resolve) => {
+      if (signal.aborted) {
+        resolve(fallback);
+        return;
+      }
+      const finish = (answer: unknown): void => {
+        this.pending.delete(requestId);
+        signal.removeEventListener('abort', onAbort);
+        resolve(answer as T);
+      };
+      const onAbort = (): void => finish(fallback);
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.pending.set(requestId, finish);
+    });
+  }
+
+  /** Delivers the user's answer. Returns false when nothing was waiting for it. */
+  private answer(requestId: string, value: unknown): boolean {
+    const resolve = this.pending.get(requestId);
+    if (!resolve) return false;
+    resolve(value);
+    return true;
+  }
+
+  /** Number of questions currently waiting for the user. Used by tests. */
+  get pendingCount(): number {
+    return this.pending.size;
+  }
+
+  confirmContext(requestId: string, signal: AbortSignal): Promise<boolean> {
+    return this.ask<boolean>(requestId, signal, false);
   }
 
   // ───────────────────────── messages ─────────────────────────
@@ -241,6 +285,19 @@ export class ChatController implements AgentEvents {
         this.post({ type: 'models', requestId: message.requestId, ...result });
         return;
       }
+      case 'contextDecision':
+        this.answer(message.requestId, message.send);
+        return;
+      case 'searchFiles': {
+        const index = this.services.workspace.index;
+        let files: string[] = [];
+        if (index) {
+          await index.ensureFresh();
+          files = findFiles(index, message.query, 12);
+        }
+        this.post({ type: 'fileSuggestions', requestId: message.requestId, files });
+        return;
+      }
       case 'openFile':
         await this.openFile(message.path, message.line);
         return;
@@ -312,7 +369,17 @@ export class ChatController implements AgentEvents {
     }
 
     this.abort = new AbortController();
-    const runtime = new AgentRuntime({ provider, events: this, logger: this.services.logger });
+    const { settings } = this.services.settings();
+    const workspace = this.services.workspace;
+    const index = workspace.index;
+    const runtime = new AgentRuntime({
+      provider,
+      events: this,
+      host: this,
+      logger: this.services.logger,
+      workspace: index ? { index, ripgrepPath: workspace.ripgrepPath } : undefined,
+      limits: { defaultContextWindow: settings.defaultContextWindow, confirmBeforeSend: settings.confirmBeforeSend },
+    });
     try {
       const result = await runtime.run(
         {
@@ -321,6 +388,10 @@ export class ChatController implements AgentEvents {
           mode: input.mode,
           history: session.turns,
           workspaceName: workspaceName(),
+          activeFile: workspace.editorContext().activeFile,
+          openFiles: workspace.openFiles(),
+          projectFacts: await workspace.projectFacts(),
+          projectRules: await workspace.projectRules(),
         },
         this.abort.signal,
       );
@@ -426,6 +497,19 @@ export class ChatController implements AgentEvents {
   }
 
   // ───────────────────────── editor ─────────────────────────
+
+  /** Attaches the editor's current selection (or file) to the next message. */
+  addSelectionToChat(): boolean {
+    const editor = this.services.workspace.editorContext();
+    const attachment: Attachment | undefined = editor.selection
+      ? { ...editor.selection, source: 'selection' }
+      : editor.activeFile
+        ? { path: editor.activeFile, source: 'mention' }
+        : undefined;
+    if (!attachment) return false;
+    this.post({ type: 'addAttachment', attachment });
+    return true;
+  }
 
   private async openFile(relativePath: string, line?: number): Promise<void> {
     const root = workspaceRoot();
