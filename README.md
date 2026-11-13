@@ -4,7 +4,9 @@
 > to help developers understand, change, and verify software projects
 > using the AI model or compatible API endpoint they choose.
 
-**Project status:** Planning / pre-implementation\
+**Project status:** Milestones 0 to 8 (light) implemented and tested
+against a mock provider; not yet tested with a live provider. See
+`project_status.md`.\
 **Product model:** Free to use, proprietary source code, bring your own
 API key\
 **Initial client:** Visual Studio Code extension\
@@ -340,9 +342,51 @@ from their chosen provider.
 
 ## 15. Current status
 
-This document describes the intended product and architecture. It does
-not claim that these features have already been implemented.
+The milestones in `DEVELOPMENT_PLAN.md` are implemented through Milestone
+7, plus the light Milestone 8 items. `project_status.md` lists what was
+built, the exact checks that were run, and what has not been verified.
+The most important gap: no request has been sent to a real provider yet.
 
-The first engineering task is to inspect the actual repository, record
-its current state, and implement the first vertical slice without
-creating unnecessary infrastructure.
+Sections 1 to 14 above describe the product intent and remain the
+reference for design decisions.
+
+## 16. Getting started
+
+Requirements: Node.js 20 or newer, npm, and VS Code 1.90 or newer.
+
+``` text
+npm install          install dependencies
+npm run build        build the extension and the chat UI into dist/
+npm run package      create byteagent.vsix
+```
+
+Install `byteagent.vsix` from the Extensions view ("Install from VSIX"),
+or press F5 in this repository to start a development instance.
+
+First use:
+
+1.  Click the ByteAgent icon in the activity bar.
+2.  Pick a provider, paste the API key, enter a model name and press
+    "Test connection". Local servers such as Ollama need no key.
+3.  Open a project folder and ask a question or request a change.
+4.  Review each proposed change in the chat or the diff editor, then
+    apply or reject it. Commands ask for permission separately.
+5.  Optional: run "ByteAgent: Set Up Project Knowledge" to create the
+    `.byteagent/` documents after reviewing them.
+
+## 17. Development commands
+
+``` text
+npm run typecheck        type-check the extension and the chat UI
+npm test                 unit, integration and measurement tests (Vitest)
+npm run test:extension   tests inside a real VS Code instance
+npm run test:vsix        package, install into a clean profile, and test
+npm run build:harness    build the chat UI for a normal browser
+node scripts/shot.mjs    screenshot UI scenarios with headless Chrome
+```
+
+All automated tests use the local mock provider in
+`tests/mock/mockServer.ts`. No API key or network access is needed.
+
+Documentation for contributors: `docs/architecture.md`,
+`docs/provider-contract.md`, `docs/security.md`, `docs/decisions.md`.

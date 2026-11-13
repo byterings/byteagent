@@ -303,9 +303,11 @@
     "test:watch": "vitest",
     "test:extension": "npm run build && node scripts/build.mjs --tests && node tests/extension/runTests.cjs",
     "check": "npm run typecheck && npm run test",
-    "package": "npm run build && vsce package --no-dependencies",
-    "vscode:prepublish": "npm run build",
-    "build:harness": "vite build --config webview/vite.harness.config.mts"
+    "package": "vsce package --no-dependencies --skip-license --out byteagent.vsix",
+    "vscode:prepublish": "npm run build:prod",
+    "build:harness": "vite build --config webview/vite.harness.config.mts",
+    "build:prod": "node scripts/build.mjs --production && npm run build:webview",
+    "test:vsix": "npm run package && node scripts/build.mjs --tests && node scripts/test-vsix.cjs"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

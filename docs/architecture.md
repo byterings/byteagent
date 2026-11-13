@@ -32,6 +32,9 @@ Files allowed to import `vscode`:
   `src/config/secrets.ts`
 - `src/changes/vscodeReview.ts`
 
+`src/chat/` also holds `workspaceService.ts` (index lifecycle and editor
+state) and `vscodeChangeIO.ts` (writing approved changes).
+
 A unit test (`tests/unit/boundaries.test.ts`) fails the build if any other
 file imports `vscode`, or if `src/agent` imports a vendor SDK.
 
@@ -93,11 +96,15 @@ The runtime never talks to the user directly. It calls an `AgentHost`
 interface (`src/agent/host.ts`) for everything that needs a human or the
 editor:
 
-- `reviewChanges(changeSet)` → accepted, rejected or revise per file
+- `reviewChanges(changeSet)` → accept or reject per file, with optional
+  revision feedback
 - `approveCommand(request)` → allow once, allow always, or deny
-- `confirmContext(summary)` → optional pre-send confirmation
+- `confirmContext(requestId)` → optional pre-send confirmation
 - `getDiagnostics(paths)` → editor diagnostics for verification
-- `emit(event)` → progress events for the UI
+- `changeIO` → how approved content is written
+
+Progress is reported through a second interface, `AgentEvents`, which
+adds and updates transcript items.
 
 The VS Code implementation lives in `src/chat/`. Tests use a scripted fake
 host. Because approval is a required return value of the host call, there is
@@ -128,7 +135,7 @@ no code path that applies a change or runs a command without it.
 | API keys | VS Code SecretStorage | M1 |
 | Chat sessions | VS Code `workspaceState` | M2 |
 | Remembered safe commands | VS Code `workspaceState` | M5 |
-| Tasks, steps, events, verification, file index, symbols | `.byteagent/agent.db` (SQLite) | M7 |
+| Tasks, steps, events, verification, file index, symbols | SQLite: VS Code workspace storage until project setup is approved, then `.byteagent/agent.db` | M7 |
 | Human-readable project documents | `.byteagent/*.md` | M7 |
 
 The SQLite store is the source of truth for task state. Markdown documents
@@ -141,4 +148,5 @@ under `.byteagent/` are generated from it.
 | `tests/unit/` | Vitest | Pure logic, one module at a time |
 | `tests/integration/` | Vitest | Runtime + mock provider server + temp workspace on disk |
 | `tests/extension/` | VS Code Extension Test API | Activation, commands, settings, secrets, end-to-end in a real host |
+| `tests/perf/` | Vitest | Measurements for retrieval quality and index update speed |
 | `tests/mock/` | — | The mock OpenAI-compatible server used by the above |

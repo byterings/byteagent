@@ -4,13 +4,17 @@ Actual implementation state, based on what exists in the repository and
 what was verified by running it.
 
 ## Current State
-Milestones 0 to 7 are complete. ByteAgent chats with an OpenAI-compatible
-endpoint, classifies each request, sends a budgeted set of relevant files,
-reads and searches through tools, shows every file change for review,
-runs commands only after separate approval, summarises each run from
-recorded results, keeps tasks and evidence in a local SQLite database,
-sets up project knowledge files after review, and resumes unfinished
-tasks after a restart or a provider switch. Development happens on the
+Milestones 0 to 7 and the light Milestone 8 items are complete and
+packaged as `byteagent.vsix`. ByteAgent chats with an OpenAI-compatible
+endpoint, classifies each request, sends a budgeted set of relevant
+files, reads and searches through tools, shows every file change for
+review, runs commands only after separate approval, summarises each run
+from recorded results, keeps tasks and evidence in a local SQLite
+database, sets up project knowledge after review, and resumes unfinished
+tasks after a restart or a provider switch.
+
+It has been tested only against a scripted mock provider. The first run
+with a real API key is still to be done. Development happens on the
 `dev` branch.
 
 Environment used for development: Node 20.19.5, npm 10.8.2, VS Code
@@ -419,6 +423,48 @@ Not verified:
 
 Not built (deferred as R-009): Tree-sitter parsing, dependency graph,
 embeddings, semantic search, native provider adapters.
+
+### Release check: required scenarios and packaging
+- Status: done
+
+The seven scenarios in `DEVELOPMENT_PLAN.md` section 13, and where each
+is tested:
+
+| Scenario | Tested in |
+|---|---|
+| A: read-only question | tests/integration/contextRuntime.test.ts, modes.test.ts; tests/extension/context.test.ts |
+| B: small edit | tests/integration/modes.test.ts; tests/extension/changes.test.ts |
+| C: multi-file feature | tests/integration/modes.test.ts, commands.test.ts |
+| D: large task, resume after restart | tests/integration/modes.test.ts, resume.test.ts; tests/extension/project.test.ts |
+| E: switch provider mid-task | tests/integration/resume.test.ts; tests/extension/project.test.ts |
+| F: rejected change | tests/unit/changes.test.ts; tests/integration/agentTools.test.ts; tests/extension/changes.test.ts |
+| G: file changed after preview | tests/unit/changes.test.ts; tests/integration/agentTools.test.ts; tests/extension/changes.test.ts |
+
+Final verification (2026-11-13):
+- `npm run typecheck`: no errors.
+- `npm test`: 27 files, 518 tests passed.
+- `npm run test:extension`: 52 tests passed in VS Code 1.142.0.
+- `npm run test:vsix`: `byteagent.vsix` (616 KB, 10 files) installed into
+  a clean VS Code profile; the same 52 tests passed against the
+  installed, minified build.
+- Chat UI checked visually through the browser harness: first-run setup,
+  provider list, empty chat, streaming answer, change review, command
+  approval (including a destructive command), plan, outcome, error,
+  history, mode and model menus, file mention list, dark and light
+  themes, 300 px and 420 px widths.
+
+Not verified, across the whole product:
+- No real provider has been used. Every model reply in the tests comes
+  from the scripted mock server, so real models' tool-calling habits,
+  streaming quirks and error formats are untested.
+- The chat UI was never clicked inside VS Code. Its logic was driven
+  through the message protocol in a real VS Code instance, and its
+  appearance was checked in headless Chrome with approximated theme
+  colours.
+- Only Linux was tested. macOS and Windows are untested, including
+  process termination, path handling and the recycle bin.
+- No accessibility review was done beyond labelled controls and focus
+  styles.
 
 ---
 
