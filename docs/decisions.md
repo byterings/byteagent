@@ -124,3 +124,20 @@ material decision is made. Do not rewrite old entries; supersede them.
   VS Code reloads it.
 - Reason: VS Code's in-memory copy of a clean file can lag behind the
   disk, and saving it would conflict with the newer file.
+
+## D-016: The database enters the project only after setup is approved
+
+- Date: 2026-11-13
+- Decision: `agent.db` is kept in VS Code's per-workspace storage until
+  the developer approves "Set Up Project Knowledge". It then moves to
+  `.byteagent/agent.db`.
+- Reason: No file is written into a project without approval, and that
+  includes ByteAgent's own data.
+
+## D-017: Generated documents are proposed, never written directly
+
+- Date: 2026-11-13
+- Decision: Knowledge files and the task section of the status document
+  go through the same review card as model-proposed changes.
+- Reason: One rule for every file change is easier to trust than a rule
+  with exceptions.

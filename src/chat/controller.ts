@@ -1,6 +1,8 @@
+import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { AgentEvents, AgentHost, CommandDecision, CommandRequest, DiagnosticSummary } from '../agent/host';
+import { buildOutcome } from '../agent/outcome';
 import type { ChangeIO, ChangeSet, ReviewDecision } from '../changes/types';
 import { ChangeReviewService } from '../changes/vscodeReview';
 import { AgentRuntime } from '../agent/runtime';
@@ -10,8 +12,13 @@ import { findFiles } from '../context/search';
 import { writeDefaultMode } from '../config/vscodeSettings';
 import { createProvider } from '../providers/factory';
 import type { Provider } from '../providers/types';
+import { renderTaskSection, syncStatusDocument } from '../project/docsSync';
+import { CONTEXT_FILE, describeBaseline, IGNORE_FILE, KNOWLEDGE_DIR, planOnboarding, STATUS_FILE } from '../project/onboarding';
+import { ProjectStore } from '../project/store';
 import { describeError } from '../shared/errors';
 import { createToolRegistry, type ToolRegistry } from '../tools';
+import { proposeChangesTool } from '../tools/builtin/proposeChanges';
+import { newRunRecord, type RunRecord, type ToolContext } from '../tools/types';
 import { newId, sha256 } from '../shared/hash';
 import type {
   AppState,
@@ -35,6 +42,15 @@ interface PromptInput {
   text: string;
   mode: ModeSetting;
   attachments: Attachment[];
+  /** Continue this saved task. */
+  resumeTaskId?: string;
+}
+
+export interface InitProjectOptions {
+  /** What the project should do, for a workspace without code. */
+  requirements?: string;
+  /** Also create AGENTS.md. Only on explicit request. */
+  includeAgentsFile?: boolean;
 }
 
 const MAX_TURNS = 40;
@@ -63,6 +79,10 @@ export class ChatController implements AgentEvents, AgentHost {
   private readonly pending = new Map<string, (answer: unknown) => void>();
   private readonly review = new ChangeReviewService();
   private tasks: TaskTracker = new MemoryTaskTracker();
+  private store: ProjectStore | undefined;
+  private storeReady: Promise<void>;
+  /** The task section of the last status update the developer declined. */
+  private declinedSync: string | undefined;
   private readonly tools: ToolRegistry = createToolRegistry();
   readonly changeIO: ChangeIO = new VsCodeChangeIO(workspaceRoot);
 
@@ -72,6 +92,64 @@ export class ChatController implements AgentEvents, AgentHost {
     this.session = (latest && this.sessions.get(latest.id)) || this.sessions.create();
     services.workspace.onEditorChanged = (editor) => this.post({ type: 'editorContext', editor });
     services.context.subscriptions.push(this.review);
+    this.storeReady = this.openStore().catch((err) => {
+      services.logger.error('Could not open the project database; tasks will not be saved', err);
+    });
+  }
+
+  // ───────────────────────── project store ─────────────────────────
+
+  /**
+   * The database lives in `.byteagent/` once the developer has set up
+   * project knowledge there. Until then it stays in VS Code's own storage
+   * for this workspace, so nothing is written into the project unasked.
+   */
+  private databasePath(): string | undefined {
+    const root = workspaceRoot();
+    if (!root) return undefined;
+    if (existsSync(path.join(root, KNOWLEDGE_DIR))) return path.join(root, KNOWLEDGE_DIR, 'agent.db');
+    const storage = this.services.context.storageUri?.fsPath;
+    return storage ? path.join(storage, 'agent.db') : undefined;
+  }
+
+  private async openStore(): Promise<void> {
+    const dbPath = this.databasePath();
+    if (!dbPath) return;
+    const wasmPath = path.join(this.services.context.extensionUri.fsPath, 'dist', 'sql-wasm.wasm');
+    this.store = await ProjectStore.open({ path: dbPath, wasmPath, logger: this.services.logger });
+    this.tasks = this.store;
+    if (this.store.recoveredFrom) {
+      this.post({ type: 'toast', level: 'warn', message: 'The saved task database could not be read. It was kept as a backup file and a new one was started.' });
+    }
+    this.services.logger.info(`Project database: ${dbPath}`);
+  }
+
+  /** Resolves when the project database is ready (or known to be unavailable). */
+  ready(): Promise<void> {
+    return this.storeReady;
+  }
+
+  get projectStore(): ProjectStore | undefined {
+    return this.store;
+  }
+
+  /** Saves pending data and closes the database. */
+  async dispose(): Promise<void> {
+    this.stop();
+    await this.runPromise.catch(() => undefined);
+    await this.storeReady;
+    await this.store?.dispose();
+    this.store = undefined;
+  }
+
+  /** Closes and reopens the database, as a restart of the editor would. Used by tests. */
+  async reloadStore(): Promise<void> {
+    await this.storeReady;
+    await this.store?.dispose();
+    this.store = undefined;
+    this.tasks = new MemoryTaskTracker();
+    this.storeReady = this.openStore();
+    await this.storeReady;
   }
 
   // ───────────────────────── webview plumbing ─────────────────────────
@@ -108,7 +186,9 @@ export class ChatController implements AgentEvents, AgentHost {
   }
 
   async buildState(): Promise<AppState> {
+    await this.storeReady;
     const { settings, problems } = this.services.settings();
+    const root = workspaceRoot();
     const profiles = await this.services.profiles.list();
     return {
       ready: true,
@@ -137,7 +217,7 @@ export class ChatController implements AgentEvents, AgentHost {
           stepsDone: taskProgress(task).done,
           stepsTotal: taskProgress(task).total,
         })),
-      projectInitialized: false,
+      projectInitialized: Boolean(root && existsSync(path.join(root, ...CONTEXT_FILE.split('/')))),
       editor: this.services.workspace.editorContext(),
     };
   }
@@ -401,6 +481,13 @@ export class ChatController implements AgentEvents, AgentHost {
         this.post({ type: 'fileSuggestions', requestId: message.requestId, files });
         return;
       }
+      case 'resumeTask':
+        await this.resumeTask(message.taskId);
+        return;
+      case 'initProject':
+        // The command asks the questions (requirements, optional files) first.
+        await vscode.commands.executeCommand('byteagent.initProject');
+        return;
       case 'openFile':
         await this.openFile(message.path, message.line);
         return;
@@ -418,7 +505,8 @@ export class ChatController implements AgentEvents, AgentHost {
         return;
       }
       default:
-        this.services.logger.debug(`Unhandled webview message "${message.type}"`);
+        // Every known message type is handled above; anything else is ignored.
+        this.services.logger.debug(`Unhandled webview message "${(message as { type?: string }).type}"`);
     }
   }
 
@@ -428,13 +516,24 @@ export class ChatController implements AgentEvents, AgentHost {
   startRun(input: PromptInput): boolean {
     const text = input.text.trim();
     if (!text || this.busy) return false;
+    return this.begin(() => this.run({ ...input, text }));
+  }
+
+  /** Marks the controller busy for the duration of one piece of work. */
+  private begin(work: () => Promise<void>): boolean {
+    if (this.busy) return false;
     this.busy = true;
-    this.runPromise = this.run({ ...input, text }).finally(() => {
-      this.busy = false;
-      this.abort = undefined;
-      this.flushText();
-      this.post({ type: 'busy', sessionId: this.session.id, busy: false });
-    });
+    this.runPromise = work()
+      .catch((err) => {
+        this.services.logger.error('Unexpected failure', err);
+        this.add({ kind: 'error', id: newId('e'), message: this.services.redactor.redact(describeError(err)), code: 'internal' });
+      })
+      .finally(() => {
+        this.busy = false;
+        this.abort = undefined;
+        this.flushText();
+        this.post({ type: 'busy', sessionId: this.session.id, busy: false });
+      });
     return true;
   }
 
@@ -454,9 +553,15 @@ export class ChatController implements AgentEvents, AgentHost {
 
   private async run(input: PromptInput): Promise<void> {
     const session = this.session;
-    this.lastPrompt = input;
+    this.lastPrompt = input.resumeTaskId ? undefined : input;
     this.post({ type: 'busy', sessionId: session.id, busy: true });
-    if (session.items.length === 0) session.title = titleFromPrompt(input.text);
+    await this.storeReady;
+    const resumeTask = input.resumeTaskId ? this.tasks.get(input.resumeTaskId) : undefined;
+    if (input.resumeTaskId && (!resumeTask || !isOpen(resumeTask))) {
+      this.add({ kind: 'error', id: newId('e'), message: 'That task is finished or no longer exists.', code: 'not_found' });
+      return;
+    }
+    if (session.items.length === 0) session.title = resumeTask ? `Resume: ${resumeTask.title}` : titleFromPrompt(input.text);
 
     const provider = await this.activeProvider();
     if (!provider) {
@@ -497,12 +602,23 @@ export class ChatController implements AgentEvents, AgentHost {
           activeFile: workspace.editorContext().activeFile,
           openFiles: workspace.openFiles(),
           projectFacts: await workspace.projectFacts(),
-          projectRules: await workspace.projectRules(),
+          projectRules: [await workspace.projectRules(), await workspace.projectKnowledge()].filter(Boolean).join('\n\n'),
           sessionId: session.id,
+          resumeTask,
         },
         this.abort.signal,
       );
       if (result.taskId) session.taskId = result.taskId;
+      this.store?.recordRun({
+        sessionId: session.id,
+        taskId: result.taskId,
+        record: result.record,
+        status: result.status,
+        mode: result.mode,
+        providerId: provider.id,
+        model: provider.model,
+      });
+      if (result.taskId && !this.abort.signal.aborted) await this.proposeStatusSync(this.abort.signal);
       if (result.turn) {
         session.turns.push(result.turn);
         if (session.turns.length > MAX_TURNS) session.turns.splice(0, session.turns.length - MAX_TURNS);
@@ -515,6 +631,123 @@ export class ChatController implements AgentEvents, AgentHost {
       await this.sessions.save(session);
       await this.pushState();
     }
+  }
+
+  // ───────────────────────── project knowledge ─────────────────────────
+
+  /** Shows a set of file changes for review and applies what is accepted. */
+  private async reviewOperations(
+    changes: Array<{ path: string; action: 'write'; content: string }>,
+    summary: string,
+    signal: AbortSignal,
+  ): Promise<RunRecord | undefined> {
+    const index = this.services.workspace.index;
+    if (!index) return undefined;
+    const record = newRunRecord();
+    const context: ToolContext = {
+      index,
+      signal,
+      host: this,
+      events: this,
+      record,
+      logger: this.services.logger,
+      redact: (text) => this.services.redactor.redact(text),
+    };
+    await proposeChangesTool.execute({ summary, changes }, context);
+    return record;
+  }
+
+  /**
+   * Offers an update of the generated task section in the status document.
+   * Only that section changes, and only after the usual review.
+   */
+  private async proposeStatusSync(signal: AbortSignal): Promise<void> {
+    const index = this.services.workspace.index;
+    if (!index || !this.store) return;
+    let current: string;
+    try {
+      current = (await index.readText(STATUS_FILE)).text;
+    } catch {
+      return; // no status document: nothing to keep in step
+    }
+    const section = renderTaskSection(this.store.list(), this.store.verifications({ limit: 500 }));
+    // An update the developer declined is not offered again until the tasks change.
+    if (section === this.declinedSync) return;
+    const next = syncStatusDocument(current, section);
+    if (!next) return;
+    this.add({ kind: 'notice', id: newId('n'), level: 'info', text: 'The task list in the project status document is out of date. Review the update below.' });
+    const record = await this.reviewOperations([{ path: STATUS_FILE, action: 'write', content: next }], 'Update the tracked tasks section from recorded task state', signal);
+    this.declinedSync = record && record.applied.length > 0 ? undefined : section;
+  }
+
+  /**
+   * Scans the project and proposes the knowledge files. Nothing is written
+   * without review, and existing documents are never replaced.
+   */
+  async initProject(options: InitProjectOptions = {}): Promise<boolean> {
+    return this.begin(async () => {
+      const session = this.session;
+      this.post({ type: 'busy', sessionId: session.id, busy: true });
+      this.post({ type: 'showView', view: 'chat' });
+      await this.storeReady;
+      this.abort = new AbortController();
+      const signal = this.abort.signal;
+      if (session.items.length === 0) session.title = 'Set up project knowledge';
+      try {
+        this.add({ kind: 'user', id: newId('u'), text: 'Set up project knowledge', attachments: [], mode: 'auto' });
+        const index = this.services.workspace.index;
+        if (!index) {
+          this.add({ kind: 'error', id: newId('e'), message: 'Open a folder first. Project knowledge is stored with the project.', code: 'no_workspace' });
+          return;
+        }
+        const plan = await planOnboarding(index, { name: workspaceName(), requirements: options.requirements, includeAgentsFile: options.includeAgentsFile });
+        this.add({ kind: 'assistant', id: newId('a'), text: describeBaseline(plan), streaming: false });
+        if (plan.operations.length === 0) return;
+
+        const record = await this.reviewOperations(
+          plan.operations.flatMap((op) => (op.type === 'write' ? [{ path: op.path, action: 'write' as const, content: op.content }] : [])),
+          plan.baseline.kind === 'new' ? 'Create project knowledge files for a new project' : 'Create project knowledge files from the scan',
+          signal,
+        );
+        if (!record) return;
+        const outcome = buildOutcome(record, null);
+        if (outcome) this.add({ kind: 'outcome', id: newId('o'), outcome: { ...outcome, notes: [...outcome.notes, 'Setting up project knowledge runs no checks.'] } });
+
+        // Once the folder exists with the developer's approval, the database moves into it.
+        const root = workspaceRoot();
+        if (root && this.store && record.applied.includes(IGNORE_FILE)) {
+          await this.store.relocate(path.join(root, KNOWLEDGE_DIR, 'agent.db'));
+          this.services.logger.info(`Project database moved to ${this.store.path}`);
+        }
+        if (this.store && record.applied.length > 0) {
+          await index.refresh();
+          this.store.saveFiles(index.files().map((f) => ({ path: f.path, size: f.size, mtimeMs: f.mtimeMs, ext: f.ext })));
+          this.store.setMeta('onboarded_at', String(Date.now()));
+          this.store.recordEvent({ sessionId: session.id, type: 'onboarding', data: { created: record.applied, kept: plan.kept, kind: plan.baseline.kind } });
+        }
+      } finally {
+        this.flushText();
+        await this.sessions.save(session);
+        await this.pushState();
+      }
+    });
+  }
+
+  /** Continues a saved task in a fresh conversation, with whichever provider is active now. */
+  async resumeTask(taskId: string): Promise<boolean> {
+    await this.storeReady;
+    const task = this.tasks.get(taskId);
+    if (!task || !isOpen(task)) {
+      this.post({ type: 'toast', level: 'warn', message: 'That task is finished or no longer exists.' });
+      await this.pushState();
+      return false;
+    }
+    if (this.busy) this.stop();
+    await this.runPromise;
+    if (this.session.items.length > 0) this.session = this.sessions.create();
+    await this.pushState();
+    this.post({ type: 'showView', view: 'chat' });
+    return this.startRun({ text: 'Continue this task.', mode: task.mode, attachments: [], resumeTaskId: taskId });
   }
 
   // ───────────────────────── sessions ─────────────────────────

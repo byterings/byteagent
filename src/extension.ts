@@ -11,9 +11,12 @@ export interface ByteAgentApi {
   controller: ChatController;
 }
 
+let activeController: ChatController | undefined;
+
 export function activate(context: vscode.ExtensionContext): ByteAgentApi {
   const services = createServices(context);
   const controller = new ChatController(services);
+  activeController = controller;
   const view = new ChatViewProvider(context.extensionUri, controller);
 
   context.subscriptions.push(
@@ -42,6 +45,8 @@ export function activate(context: vscode.ExtensionContext): ByteAgentApi {
   return { services, controller };
 }
 
-export function deactivate(): void {
-  // Disposables registered on the extension context are released by VS Code.
+export async function deactivate(): Promise<void> {
+  // Pending task data is written before the extension host goes away.
+  await activeController?.dispose();
+  activeController = undefined;
 }

@@ -4,13 +4,14 @@ Actual implementation state, based on what exists in the repository and
 what was verified by running it.
 
 ## Current State
-Milestones 0 to 6 are complete. ByteAgent chats with an OpenAI-compatible
-endpoint, classifies each request as Quick, Standard or Project, sends a
-budgeted set of relevant files, reads and searches through tools, shows
-every file change for review, runs commands only after separate approval,
-and summarises each run from recorded results. Plans and tasks are held
-in memory only; persistent storage and onboarding are next. Development
-happens on the `dev` branch.
+Milestones 0 to 7 are complete. ByteAgent chats with an OpenAI-compatible
+endpoint, classifies each request, sends a budgeted set of relevant files,
+reads and searches through tools, shows every file change for review,
+runs commands only after separate approval, summarises each run from
+recorded results, keeps tasks and evidence in a local SQLite database,
+sets up project knowledge files after review, and resumes unfinished
+tasks after a restart or a provider switch. Development happens on the
+`dev` branch.
 
 Environment used for development: Node 20.19.5, npm 10.8.2, VS Code
 1.142.0, git 2.43.0, ripgrep 14.1.1, Linux.
@@ -327,15 +328,68 @@ Not verified:
   unknown.
 - Tasks do not survive a restart yet (R-007).
 
+### R-007 Persistent project knowledge and onboarding
+- Status: done
+
+Files Changed:
+- src/project/ (store, onboarding, docsSync)
+- src/agent/runtime.ts (resume brief, file revalidation)
+- src/chat/ (controller, workspaceService), src/commands/index.ts,
+  src/extension.ts
+- tests/unit/ (store, onboarding), tests/integration/resume.test.ts,
+  tests/extension/project.test.ts
+
+What Changed:
+- SQLite store (sql.js) for tasks, run events, command evidence, file
+  index and symbols. Written atomically shortly after each change. An
+  unreadable database is kept as a backup file, not deleted.
+- The database stays in VS Code's storage for the workspace until the
+  developer approves project setup; then it moves to
+  `.byteagent/agent.db`, which the generated `.gitignore` excludes.
+- "Set Up Project Knowledge" scans the project and proposes
+  `.byteagent/context.md`, `project_status.md`, `roadmap.md`,
+  `decisions.md`. Facts (with sources), inferences and unknowns are kept
+  apart. Nothing is claimed to work. No roadmap items are invented.
+  Existing files are never replaced. `AGENTS.md` only on request.
+- New projects: requirements given by the developer become proposed
+  roadmap items.
+- `.byteagent/context.md` is included in the system prompt.
+- After a tracked task changes, only the marked task section of the
+  status document is offered for update, through the normal review. A
+  declined update is not offered again until the tasks change.
+- Resume: an unfinished task continues in a new conversation from stored
+  state (goal, criteria, plan, recorded results), with files it changed
+  re-checked against their recorded hashes. No earlier conversation is
+  replayed, so any provider can continue it.
+
+Why:
+- Milestone 7 exit criteria.
+
+Verification (2026-11-13):
+- `npm run typecheck`: no errors.
+- `npm test`: 25 files, 509 tests passed.
+- `npm run test:extension`: 52 tests passed in VS Code 1.142.0,
+  including rejected setup writing nothing, approved setup creating the
+  files and moving the database, edited knowledge never overwritten, a
+  task listed after the database was closed and reopened, and the task
+  continued on a second provider with no request to the first.
+
+Not verified:
+- "Restart" was simulated by closing and reopening the database inside
+  one VS Code test instance, not by quitting and starting VS Code.
+- Two VS Code windows on the same folder each hold their own copy of the
+  database in memory; the last one to write wins. Not tested, not handled.
+- Database size and speed with thousands of tasks or a very large file
+  index were not measured.
+
 ---
 
 ## In Progress
-- R-007 Persistent project knowledge and onboarding
+- R-008 Indexing improvements (light)
 
 ---
 
 ## Pending
-- R-008 Indexing improvements (light)
 
 ---
 

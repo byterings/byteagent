@@ -78,7 +78,7 @@ IDs map to milestones in `DEVELOPMENT_PLAN.md`: `R-00N` is Milestone N.
   index; onboarding for new and existing projects; generated
   `.byteagent/` documents; resume after restart and provider switch.
 - Priority: Medium
-- Status: pending
+- Status: done
 
 ### R-008
 - Title: Indexing improvements (light)

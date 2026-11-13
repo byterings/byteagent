@@ -154,6 +154,18 @@ export class WorkspaceService implements vscode.Disposable {
     return '';
   }
 
+  /** The project's own knowledge file, written during setup and edited by the developer. */
+  async projectKnowledge(): Promise<string> {
+    const index = this.index;
+    if (!index) return '';
+    try {
+      const { text } = await index.readText('.byteagent/context.md');
+      return text.trim() ? `Project knowledge from .byteagent/context.md:\n${truncateToTokens(text.trim(), RULES_TOKEN_LIMIT).text}` : '';
+    } catch {
+      return '';
+    }
+  }
+
   private unsavedText(root: string, relative: string): string | undefined {
     const target = path.join(root, ...relative.split('/'));
     for (const document of vscode.workspace.textDocuments) {

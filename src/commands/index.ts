@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { ChatViewProvider } from '../chat/chatViewProvider';
-import type { ChatController } from '../chat/controller';
+import type { ChatController, InitProjectOptions } from '../chat/controller';
 import type { Services } from '../chat/services';
 import { describeError } from '../shared/errors';
 
@@ -127,15 +127,43 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     return count;
   });
 
-  // Commands whose features arrive in later milestones still respond.
-  const later: Array<[string, string]> = [
-    [COMMANDS.initProject, 'Project knowledge'],
-  ];
-  for (const [id, feature] of later) {
-    register(id, () => {
-      void vscode.window.showInformationMessage(`ByteAgent: ${feature} is not available in this build yet.`);
-    });
-  }
+  register(COMMANDS.initProject, async (optionsArg?: unknown) => {
+    await view.reveal();
+    const root = vscode.workspace.workspaceFolders?.find((f) => f.uri.scheme === 'file');
+    if (!root) {
+      void vscode.window.showInformationMessage('ByteAgent: open a folder first. Project knowledge is stored with the project.');
+      return false;
+    }
+    // Tests and other callers may pass the answers directly.
+    if (optionsArg && typeof optionsArg === 'object') return controller.initProject(optionsArg as InitProjectOptions);
+
+    const options: InitProjectOptions = {};
+    const index = services.workspace.index;
+    await index?.ensureFresh();
+    const hasCode = index?.files().some((f) => /^(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|cs|rb|php|swift|c|cpp|h|dart|vue|svelte)$/.test(f.ext)) ?? false;
+    if (!hasCode) {
+      const requirements = await vscode.window.showInputBox({
+        title: 'ByteAgent: new project',
+        prompt: 'This folder has no code yet. Describe what you want to build (optional).',
+        placeHolder: 'For example: a REST API for todo items, stored in SQLite, with tests',
+        ignoreFocusOut: true,
+      });
+      if (requirements === undefined) return false;
+      options.requirements = requirements;
+    }
+    if (!index?.has('AGENTS.md')) {
+      const choice = await vscode.window.showQuickPick(
+        [
+          { label: 'Knowledge files only', description: 'in .byteagent/', value: false },
+          { label: 'Knowledge files and AGENTS.md', description: 'adds a rules file for AI agents at the project root', value: true },
+        ],
+        { title: 'ByteAgent: what should be created?', placeHolder: 'You review every file before it is written', ignoreFocusOut: true },
+      );
+      if (!choice) return false;
+      options.includeAgentsFile = choice.value;
+    }
+    return controller.initProject(options);
+  });
 }
 
 async function pickProfile(services: Services, arg: unknown, title: string): Promise<string | undefined> {

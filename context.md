@@ -18,13 +18,14 @@ Detailed references:
   host (Node.js, TypeScript, bundled with esbuild).
 - Frontend: a React chat UI in a sidebar webview (bundled with Vite),
   talking to the extension host through typed messages.
-- Database: SQLite through WebAssembly (`sql.js`) at
-  `.byteagent/agent.db` inside the user's workspace, planned for
-  Milestone 7. VS Code settings, SecretStorage and `workspaceState` hold
-  configuration, keys and chat sessions.
+- Database: SQLite through WebAssembly (`sql.js`). It holds tasks, run
+  events, command evidence and the file index. It lives in VS Code's
+  workspace storage until project setup is approved, then at
+  `.byteagent/agent.db`. VS Code settings, SecretStorage and
+  `workspaceState` hold configuration, keys and chat sessions.
 
 ## Modules
-Planned layout under `src/` (see `project_status.md` for what exists):
+Layout under `src/`:
 - `providers`: provider contract and OpenAI-compatible adapter
 - `agent`: classifier, prompts, runtime loop, task state
 - `context`: scan, exclusions, search, ranking, token budget
