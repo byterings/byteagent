@@ -202,7 +202,10 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
 
 function ChangesItem({ item }: { item: Item<'changes'> }) {
   const pending = item.status === 'pending';
-  const [rejected, setRejected] = useState<Record<string, boolean>>({});
+  // Deletions start unselected: the user has to opt in to each one.
+  const [rejected, setRejected] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(item.files.filter((f) => f.kind === 'delete').map((f) => [f.changeId, true])),
+  );
   const [revising, setRevising] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [sent, setSent] = useState(false);

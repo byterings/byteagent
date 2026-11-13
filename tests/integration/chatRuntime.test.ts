@@ -3,7 +3,7 @@ import { AgentRuntime, historyMessages } from '../../src/agent/runtime';
 import { createProvider } from '../../src/providers/factory';
 import { nullLogger } from '../../src/shared/logger';
 import { MockServer } from '../mock/mockServer';
-import { RecordingEvents } from './helpers';
+import { FakeHost, RecordingEvents } from './helpers';
 
 const server = new MockServer();
 let baseUrl = '';
@@ -21,7 +21,7 @@ function setup() {
     runtime: new AgentRuntime({
       provider,
       events,
-      host: { confirmContext: async () => true },
+      host: new FakeHost('/nonexistent'),
       logger: nullLogger,
       limits: { defaultContextWindow: 32000, confirmBeforeSend: false },
     }),
@@ -75,7 +75,7 @@ describe('chat runtime', () => {
     expect(result.turn).toBeUndefined();
     const error = events.of('error')[0];
     expect(error).toMatchObject({ code: 'auth', canRetry: true, openSettings: true });
-    expect(events.of('assistant')[0]?.streaming).toBe(false);
+    expect(events.of('assistant').every((a) => !a.streaming)).toBe(true);
   });
 
   it('stops when cancelled, keeps partial text and says so', async () => {

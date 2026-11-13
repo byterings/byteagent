@@ -54,7 +54,7 @@ IDs map to milestones in `DEVELOPMENT_PLAN.md`: `R-00N` is Milestone N.
   diff review with accept, reject and revise, stale detection, exact
   application, partial-failure reporting.
 - Priority: High
-- Status: pending
+- Status: done
 
 ### R-005
 - Title: Tool manager and verification

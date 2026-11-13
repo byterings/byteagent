@@ -6,7 +6,7 @@ import { nullLogger } from '../../src/shared/logger';
 import type { Attachment } from '../../src/shared/protocol';
 import { sampleProject, tempWorkspace, type TempWorkspace } from '../helpers/tempWorkspace';
 import { MockServer } from '../mock/mockServer';
-import { RecordingEvents } from './helpers';
+import { FakeHost, RecordingEvents } from './helpers';
 
 const server = new MockServer();
 let baseUrl = '';
@@ -28,7 +28,7 @@ function setup(options: { confirm?: boolean; host?: Partial<AgentHost>; contextW
   const runtime = new AgentRuntime({
     provider,
     events,
-    host: { confirmContext: async () => true, ...options.host },
+    host: Object.assign(new FakeHost(ws.root), options.host ?? {}),
     logger: nullLogger,
     workspace: options.noWorkspace ? undefined : { index: ws.index() },
     limits: { defaultContextWindow: 32000, confirmBeforeSend: options.confirm ?? false },

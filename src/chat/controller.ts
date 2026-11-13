@@ -1,6 +1,8 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { AgentEvents, AgentHost } from '../agent/host';
+import type { ChangeIO, ChangeSet, ReviewDecision } from '../changes/types';
+import { ChangeReviewService } from '../changes/vscodeReview';
 import { AgentRuntime } from '../agent/runtime';
 import { findActiveProfile, PROVIDER_PRESETS, type ProviderProfile } from '../config/settings';
 import { findFiles } from '../context/search';
@@ -8,6 +10,7 @@ import { writeDefaultMode } from '../config/vscodeSettings';
 import { createProvider } from '../providers/factory';
 import type { Provider } from '../providers/types';
 import { describeError } from '../shared/errors';
+import { createToolRegistry, type ToolRegistry } from '../tools';
 import { newId, sha256 } from '../shared/hash';
 import type {
   AppState,
@@ -23,6 +26,7 @@ import type {
 } from '../shared/protocol';
 import { SessionStore, titleFromPrompt, type Session } from './sessionStore';
 import { workspaceName, workspaceRoot, type Services } from './services';
+import { VsCodeChangeIO } from './vscodeChangeIO';
 
 export type Poster = (message: HostMessage) => void;
 
@@ -54,12 +58,16 @@ export class ChatController implements AgentEvents, AgentHost {
   private runPromise: Promise<void> = Promise.resolve();
   /** Questions waiting for the user's answer, by request id. */
   private readonly pending = new Map<string, (answer: unknown) => void>();
+  private readonly review = new ChangeReviewService();
+  private readonly tools: ToolRegistry = createToolRegistry();
+  readonly changeIO: ChangeIO = new VsCodeChangeIO(workspaceRoot);
 
   constructor(private readonly services: Services) {
     this.sessions = new SessionStore(services.context.workspaceState);
     const latest = this.sessions.list()[0];
     this.session = (latest && this.sessions.get(latest.id)) || this.sessions.create();
     services.workspace.onEditorChanged = (editor) => this.post({ type: 'editorContext', editor });
+    services.context.subscriptions.push(this.review);
   }
 
   // ───────────────────────── webview plumbing ─────────────────────────
@@ -205,6 +213,12 @@ export class ChatController implements AgentEvents, AgentHost {
     return this.ask<boolean>(requestId, signal, false);
   }
 
+  reviewChanges(changeSet: ChangeSet, signal: AbortSignal): Promise<ReviewDecision> {
+    this.review.remember(changeSet);
+    // Stopping the run answers with no accepted files.
+    return this.ask<ReviewDecision>(changeSet.id, signal, { decisions: {} });
+  }
+
   // ───────────────────────── messages ─────────────────────────
 
   async handleMessage(message: WebviewMessage): Promise<void> {
@@ -288,6 +302,23 @@ export class ChatController implements AgentEvents, AgentHost {
       case 'contextDecision':
         this.answer(message.requestId, message.send);
         return;
+      case 'reviewDecision': {
+        // Only an explicit "accept" counts; anything else is a rejection.
+        const decisions: Record<string, 'accept' | 'reject'> = {};
+        for (const [id, value] of Object.entries(message.decisions ?? {})) decisions[id] = value === 'accept' ? 'accept' : 'reject';
+        const feedback = typeof message.feedback === 'string' && message.feedback.trim() ? message.feedback.trim().slice(0, 2000) : undefined;
+        if (feedback) for (const id of Object.keys(decisions)) decisions[id] = 'reject';
+        if (!this.answer(message.changeSetId, { decisions, feedback } satisfies ReviewDecision)) {
+          this.post({ type: 'toast', level: 'warn', message: 'That proposal is no longer waiting for review.' });
+        }
+        return;
+      }
+      case 'openDiff': {
+        if (!(await this.review.openDiff(message.changeSetId, message.changeId))) {
+          this.post({ type: 'toast', level: 'info', message: 'The diff for that change is no longer available.' });
+        }
+        return;
+      }
       case 'searchFiles': {
         const index = this.services.workspace.index;
         let files: string[] = [];
@@ -378,7 +409,9 @@ export class ChatController implements AgentEvents, AgentHost {
       host: this,
       logger: this.services.logger,
       workspace: index ? { index, ripgrepPath: workspace.ripgrepPath } : undefined,
+      tools: this.tools,
       limits: { defaultContextWindow: settings.defaultContextWindow, confirmBeforeSend: settings.confirmBeforeSend },
+      redact: (text) => this.services.redactor.redact(text),
     });
     try {
       const result = await runtime.run(

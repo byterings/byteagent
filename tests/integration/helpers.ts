@@ -1,4 +1,6 @@
-import type { AgentEvents } from '../../src/agent/host';
+import type { AgentEvents, AgentHost } from '../../src/agent/host';
+import { NodeChangeIO } from '../../src/changes/applier';
+import type { ChangeIO, ChangeSet, ReviewDecision } from '../../src/changes/types';
 import type { ChatItem, ChatItemPatch, UsageView } from '../../src/shared/protocol';
 
 /** Records everything the runtime reports, as the chat UI would show it. */
@@ -33,5 +35,36 @@ export class RecordingEvents implements AgentEvents {
   }
   get kinds(): string[] {
     return this.items.map((i) => i.kind);
+  }
+}
+
+export const acceptAll = (set: ChangeSet): ReviewDecision => ({
+  decisions: Object.fromEntries(set.changes.map((c) => [c.id, 'accept' as const])),
+});
+export const rejectAll = (set: ChangeSet): ReviewDecision => ({
+  decisions: Object.fromEntries(set.changes.map((c) => [c.id, 'reject' as const])),
+});
+
+/** Stands in for the user: answers reviews and confirmations from a script. */
+export class FakeHost implements AgentHost {
+  /** Every change set that was shown for review, in order. */
+  reviews: ChangeSet[] = [];
+  /** Decides each review. Defaults to rejecting, so a test must opt in to applying. */
+  reviewer: (set: ChangeSet, count: number) => ReviewDecision | Promise<ReviewDecision> = rejectAll;
+  confirm = true;
+  changeIO: ChangeIO;
+
+  constructor(root: string) {
+    this.changeIO = new NodeChangeIO(root);
+  }
+
+  async confirmContext(): Promise<boolean> {
+    return this.confirm;
+  }
+
+  async reviewChanges(set: ChangeSet, signal: AbortSignal): Promise<ReviewDecision> {
+    this.reviews.push(set);
+    if (signal.aborted) return { decisions: {} };
+    return this.reviewer(set, this.reviews.length);
   }
 }

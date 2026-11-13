@@ -4,11 +4,11 @@ Actual implementation state, based on what exists in the repository and
 what was verified by running it.
 
 ## Current State
-Milestones 0 to 3 are complete. The extension builds, activates, stores
-provider profiles and API keys, holds a streamed chat with an
-OpenAI-compatible endpoint, and sends a selected, budgeted set of
-workspace files with each request. It cannot propose changes or run
-tools yet. Development happens on the `dev` branch.
+Milestones 0 to 4 are complete. The extension holds a streamed chat with
+an OpenAI-compatible endpoint, sends a selected, budgeted set of workspace
+files, lets the model read and search the workspace through tools, and
+shows every proposed file change for review before anything is written.
+It cannot run commands yet. Development happens on the `dev` branch.
 
 Environment used for development: Node 20.19.5, npm 10.8.2, VS Code
 1.142.0, git 2.43.0, ripgrep 14.1.1, Linux.
@@ -175,15 +175,71 @@ Not verified:
   large real repository.
 - Multi-root workspaces: only the first folder is used.
 
+### R-004 Safe patch proposals and diff review
+- Status: done
+
+Files Changed:
+- src/changes/ (types, proposal, applier, vscodeReview)
+- src/tools/ (schema, types, registry, index, builtin/readTools,
+  builtin/proposeChanges)
+- src/agent/ (runtime rewritten with the tool loop, textTools, host)
+- src/chat/ (controller, vscodeChangeIO)
+- webview/src/components/Items.tsx
+- tests/unit/ (changes, tools), tests/integration/agentTools.test.ts,
+  tests/extension/changes.test.ts
+
+What Changed:
+- The model changes files only through `propose_changes` (whole-file
+  write, exact search-and-replace edit, delete). Proposals are normalised
+  to full new content with a hash of the content they were based on.
+- A proposal with any invalid part (path outside the workspace, blocked
+  file, search text not found or ambiguous, no effective change) is
+  returned to the model and never shown to the user.
+- Review card with per-file accept and reject, "ask for changes", and the
+  VS Code diff editor. Deletions start unselected and go to the trash
+  where the platform supports it.
+- At accept time each file is re-checked against the exclusion rules and
+  its base hash, including unsaved editor text. Changed files are
+  reported as stale and left alone. Written content is read back and
+  compared. Results are reported per file.
+- Tool registry with schema validation and permission classes, plus
+  `read_file`, `search_files` and `list_directory`.
+- Text-based tool protocol for endpoints without native tool calling,
+  chosen by setting or automatically when the endpoint rejects tools.
+- Step limit per run and removal of old tool output when the context
+  window fills.
+
+Why:
+- Milestone 4 exit criteria. The tool registry was brought forward from
+  Milestone 5 because the model needs a tool to propose changes.
+
+Verification (2026-11-13):
+- `npm run typecheck`: no errors.
+- `npm test`: 16 files, 245 tests passed. Covered: accept, reject,
+  mixed review, revision feedback, stale file on disk, stale unsaved
+  editor text, file appearing at a new path, invalid and blocked paths,
+  partial write failure, content mismatch after write, stop during
+  review, text fallback.
+- `npm run test:extension`: 31 tests passed in VS Code 1.142.0,
+  including nothing written while a proposal waits, apply on accept,
+  unchanged on reject, stale detection against unsaved editor changes,
+  multi-file create/modify/delete, and the diff editor opening.
+
+Not verified:
+- Files are read and written as UTF-8. Files in other encodings are not
+  handled specially and have not been tested.
+- The review card's buttons were exercised through the webview message
+  protocol and the browser harness, not by clicking inside VS Code.
+- Trash behaviour for deletions was checked on Linux only.
+
 ---
 
 ## In Progress
-- R-004 Safe patch proposals and diff review
+- R-005 Tool manager and verification
 
 ---
 
 ## Pending
-- R-005 Tool manager and verification
 - R-006 Adaptive execution policy
 - R-007 Persistent project knowledge and onboarding
 - R-008 Indexing improvements (light)
