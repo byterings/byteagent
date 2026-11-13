@@ -21,6 +21,8 @@ export interface CommandRecord {
   /** True when the command was run to check the work (tests, build, lint). */
   verification: boolean;
   outputSummary: string;
+  /** Position in the run's order of events. */
+  sequence: number;
 }
 
 /** Facts recorded during a run. The outcome summary is built only from these. */
@@ -34,10 +36,14 @@ export interface RunRecord {
   proposals: number;
   /** Feedback the user gave while reviewing changes. */
   feedback: string[];
+  /** Counter that orders applied changes and commands within the run. */
+  sequence: number;
+  /** Sequence number of the most recent applied change, or -1. */
+  lastAppliedAt: number;
 }
 
 export function newRunRecord(): RunRecord {
-  return { applied: [], rejected: [], stale: [], failed: [], commands: [], filesRead: new Set(), proposals: 0, feedback: [] };
+  return { applied: [], rejected: [], stale: [], failed: [], commands: [], filesRead: new Set(), proposals: 0, feedback: [], sequence: 0, lastAppliedAt: -1 };
 }
 
 export interface ToolContext {

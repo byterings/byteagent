@@ -4,11 +4,13 @@ Actual implementation state, based on what exists in the repository and
 what was verified by running it.
 
 ## Current State
-Milestones 0 to 4 are complete. The extension holds a streamed chat with
+Milestones 0 to 5 are complete. The extension holds a streamed chat with
 an OpenAI-compatible endpoint, sends a selected, budgeted set of workspace
-files, lets the model read and search the workspace through tools, and
-shows every proposed file change for review before anything is written.
-It cannot run commands yet. Development happens on the `dev` branch.
+files, lets the model read and search the workspace, shows every proposed
+file change for review, runs commands only after separate approval, and
+ends each run with a summary built from recorded results. Every request
+still runs in Quick mode; automatic classification is next. Development
+happens on the `dev` branch.
 
 Environment used for development: Node 20.19.5, npm 10.8.2, VS Code
 1.142.0, git 2.43.0, ripgrep 14.1.1, Linux.
@@ -232,15 +234,65 @@ Not verified:
   protocol and the browser harness, not by clicking inside VS Code.
 - Trash behaviour for deletions was checked on Linux only.
 
+### R-005 Tool manager and verification
+- Status: done
+
+Files Changed:
+- src/tools/ (commandRisk, commandRunner, builtin/gitTools,
+  builtin/runCommand, index, types)
+- src/agent/ (outcome, runtime, host)
+- src/chat/controller.ts, src/commands/index.ts, package.json
+- tests/unit/ (commandRisk, commandRunner), tests/integration/
+  commands.test.ts, tests/extension/commands.test.ts
+
+What Changed:
+- Tools: `git_status`, `git_diff` (read-only, fixed arguments, sensitive
+  files removed from diffs) and `run_command`.
+- Command risk classifier with three levels and reasons. Unknown
+  commands are never "safe". Chains take the highest risk of their parts.
+  Commands that touch sensitive files are flagged.
+- Every command asks first. "Always allow" is stored per workspace and
+  only for an exact, safe, unchained command. A new command,
+  "ByteAgent: Forget Always-Allowed Commands", clears the list.
+- Approving a file change never approves a command.
+- Runner: workspace root, time limit, cancellation that kills the whole
+  process group, bounded and redacted output, no terminal attached.
+- Outcome card built only from recorded results: files applied, rejected
+  or failed, commands with exit codes, editor diagnostics, and a
+  verification state. "Verified" requires a check that exited with 0
+  after the last file change.
+
+Why:
+- Milestone 5 exit criteria.
+
+Verification (2026-11-13):
+- `npm run typecheck`: no errors.
+- `npm test`: 19 files, 388 tests passed, including 111 command
+  classification cases, timeout and cancel killing child processes,
+  denied commands not running, "always" refused for risky commands, and
+  outcome states (passed, failed, not verified after a later change).
+- `npm run test:extension`: 39 tests passed in VS Code 1.142.0,
+  including a real `npm test` run in the fixture workspace after
+  approval, remembered commands, and stop cancelling a running command.
+
+Not verified:
+- The command runner was tested on Linux only. Windows process-tree
+  termination uses `taskkill` and is untested.
+- The risk classifier is a rule list. Commands it does not know are
+  treated as "moderate", but an unusual destructive command could be
+  rated lower than it deserves; the user still sees and approves every
+  command that is not on their own allow list.
+- Editor diagnostics depend on language extensions, which were disabled
+  in the test instance.
+
 ---
 
 ## In Progress
-- R-005 Tool manager and verification
+- R-006 Adaptive execution policy
 
 ---
 
 ## Pending
-- R-006 Adaptive execution policy
 - R-007 Persistent project knowledge and onboarding
 - R-008 Indexing improvements (light)
 

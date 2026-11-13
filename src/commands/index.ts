@@ -15,6 +15,7 @@ export const COMMANDS = {
   initProject: 'byteagent.initProject',
   addSelectionToChat: 'byteagent.addSelectionToChat',
   showLogs: 'byteagent.showLogs',
+  resetCommandApprovals: 'byteagent.resetCommandApprovals',
 } as const;
 
 export interface CommandDeps {
@@ -115,6 +116,15 @@ export function registerCommands(context: vscode.ExtensionContext, deps: Command
     if (!controller.addSelectionToChat()) {
       void vscode.window.showInformationMessage('ByteAgent: open a file in this workspace first. Files excluded from ByteAgent cannot be added.');
     }
+  });
+
+  register(COMMANDS.resetCommandApprovals, async () => {
+    const count = controller.rememberedCommands().length;
+    await controller.forgetCommands();
+    void vscode.window.showInformationMessage(
+      count === 0 ? 'ByteAgent: no commands were set to always allow in this workspace.' : `ByteAgent: forgot ${count} always-allowed command${count === 1 ? '' : 's'}. You will be asked again.`,
+    );
+    return count;
   });
 
   // Commands whose features arrive in later milestones still respond.

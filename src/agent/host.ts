@@ -1,5 +1,5 @@
 import type { ChangeIO, ChangeSet, ReviewDecision } from '../changes/types';
-import type { ChatItem, ChatItemPatch, UsageView } from '../shared/protocol';
+import type { ChatItem, ChatItemPatch, CommandRisk, UsageView } from '../shared/protocol';
 
 /**
  * Where the runtime reports what it is doing. The chat controller turns
@@ -10,6 +10,23 @@ export interface AgentEvents {
   update(id: string, patch: ChatItemPatch): void;
   appendText(id: string, delta: string): void;
   usage(usage: UsageView): void;
+}
+
+export interface CommandRequest {
+  requestId: string;
+  command: string;
+  risk: CommandRisk;
+  reasons: string[];
+  canRemember: boolean;
+}
+
+export type CommandDecision = 'once' | 'always' | 'deny';
+
+export interface DiagnosticSummary {
+  errors: number;
+  warnings: number;
+  /** Files that have at least one error. */
+  files: string[];
 }
 
 /**
@@ -26,6 +43,18 @@ export interface AgentHost {
   reviewChanges(changeSet: ChangeSet, signal: AbortSignal): Promise<ReviewDecision>;
   /** How approved changes are written (editor-aware inside VS Code). */
   changeIO: ChangeIO;
+  /**
+   * Asks the user whether a command may run. A stopped run must resolve
+   * with "deny". Approving a file change never answers this question.
+   */
+  approveCommand(request: CommandRequest, signal: AbortSignal): Promise<CommandDecision>;
+  /** True when the user chose "always allow" for this exact command in this workspace. */
+  isCommandRemembered(command: string): boolean;
+  rememberCommand(command: string): Promise<void>;
+  /** Longest time an approved command may run. */
+  commandTimeoutMs: number;
+  /** Editor diagnostics for the given files, or null when unavailable. */
+  getDiagnostics(paths: string[]): Promise<DiagnosticSummary | null>;
 }
 
 /** One completed exchange, kept so later prompts have conversation context. */

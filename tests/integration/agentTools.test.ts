@@ -67,7 +67,7 @@ describe('tool loop: reading', () => {
     expect(result.status).toBe('completed');
     expect(result.assistantText).toBe('The tax rate is 20%.');
     expect(server.chatRequests).toHaveLength(2);
-    expect(server.chatRequests[0]!.body.tools.map((t: { function: { name: string } }) => t.function.name)).toEqual(['read_file', 'search_files', 'list_directory', 'propose_changes']);
+    expect(server.chatRequests[0]!.body.tools.map((t: { function: { name: string } }) => t.function.name)).toEqual(['read_file', 'search_files', 'list_directory', 'git_status', 'git_diff', 'propose_changes', 'run_command']);
     expect(toolResults(1)[0]).toContain('export const TAX_RATE = 0.2;');
     expect(events.of('tool')[0]).toMatchObject({ tool: 'read_file', status: 'done', path: 'src/services/tax.ts' });
     expect(events.of('changes')).toEqual([]);

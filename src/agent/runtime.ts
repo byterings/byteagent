@@ -8,7 +8,8 @@ import type { Attachment, ExecutionMode, ModeSetting } from '../shared/protocol'
 import { estimateMessagesTokens, estimateTokens } from '../shared/tokens';
 import type { ToolRegistry } from '../tools/registry';
 import { newRunRecord, type PermissionClass, type RunRecord, type ToolContext } from '../tools/types';
-import type { AgentEvents, AgentHost, Turn } from './host';
+import type { AgentEvents, AgentHost, DiagnosticSummary, Turn } from './host';
+import { buildOutcome } from './outcome';
 import { buildSystemPrompt } from './prompts';
 import { parseTextToolCalls, toolInstructions, toTextProtocol } from './textTools';
 
@@ -105,7 +106,7 @@ export class AgentRuntime {
     });
 
     const registry = workspace ? this.deps.tools : undefined;
-    const allowed: ReadonlySet<PermissionClass> = new Set<PermissionClass>(['read', 'propose']);
+    const allowed: ReadonlySet<PermissionClass> = new Set<PermissionClass>(['read', 'propose', 'execute']);
     const toolSpecs = registry ? registry.specs(allowed) : [];
     this.useTextTools = toolSpecs.length > 0 && provider.getCapabilities().toolCalling === 'none';
 
@@ -210,6 +211,7 @@ export class AgentRuntime {
       if (!this.reportedUsage) {
         events.usage({ inputTokens: estimateMessagesTokens(messages), outputTokens: this.outputTokens, estimated: true });
       }
+      await this.reportOutcome(record);
       return finish('completed');
     } catch (err) {
       // What the user already saw stays part of the conversation.
@@ -217,6 +219,7 @@ export class AgentRuntime {
       this.partialText = '';
       if (isCancellation(err)) {
         events.add({ kind: 'notice', id: newId('n'), level: 'info', text: 'Stopped.' });
+        await this.reportOutcome(record);
         return finish('cancelled');
       }
       logger.error('Run failed', err);
@@ -230,8 +233,27 @@ export class AgentRuntime {
         canRetry: record.applied.length === 0 && record.commands.length === 0,
         openSettings: code === 'auth' || code === 'not_found' || code === 'network',
       });
+      await this.reportOutcome(record);
       return finish('failed', code);
     }
+  }
+
+  /**
+   * Shows what actually happened in this run. It is produced however the
+   * run ended, because applied changes stay applied.
+   */
+  private async reportOutcome(record: RunRecord): Promise<void> {
+    let diagnostics: DiagnosticSummary | null = null;
+    const applied = [...new Set(record.applied)];
+    if (applied.length > 0) {
+      try {
+        diagnostics = await this.deps.host.getDiagnostics(applied);
+      } catch (err) {
+        this.deps.logger.warn('Could not read editor diagnostics', err);
+      }
+    }
+    const outcome = buildOutcome(record, diagnostics);
+    if (outcome) this.deps.events.add({ kind: 'outcome', id: newId('o'), outcome });
   }
 
   /** One model round trip: streams text into the transcript and collects tool calls. */

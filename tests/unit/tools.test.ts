@@ -93,8 +93,13 @@ describe('ToolRegistry', () => {
     const result = await registry.invoke(call('propose_changes', { changes: [{ path: 'a.txt', action: 'write', content: 'x' }] }), ctx, READ);
     expect(result).toEqual({ ok: false, content: 'Error: the tool "propose_changes" is not permitted in this conversation.' });
     expect(host.reviews).toEqual([]);
-    expect(registry.specs(READ).map((s) => s.name)).toEqual(['read_file', 'search_files', 'list_directory']);
+    expect(registry.specs(READ).map((s) => s.name)).toEqual(['read_file', 'search_files', 'list_directory', 'git_status', 'git_diff']);
     expect(registry.specs(READ_PROPOSE).map((s) => s.name)).toContain('propose_changes');
+    expect(registry.specs(READ_PROPOSE).map((s) => s.name)).not.toContain('run_command');
+
+    const ran = await registry.invoke(call('run_command', { command: 'echo hi' }), ctx, READ_PROPOSE);
+    expect(ran.content).toMatch(/not permitted/);
+    expect(host.commandRequests).toEqual([]);
   });
 
   it('never runs a tool whose class is not allowed, even a custom one', async () => {

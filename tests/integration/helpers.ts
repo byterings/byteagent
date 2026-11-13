@@ -1,4 +1,4 @@
-import type { AgentEvents, AgentHost } from '../../src/agent/host';
+import type { AgentEvents, AgentHost, CommandDecision, CommandRequest, DiagnosticSummary } from '../../src/agent/host';
 import { NodeChangeIO } from '../../src/changes/applier';
 import type { ChangeIO, ChangeSet, ReviewDecision } from '../../src/changes/types';
 import type { ChatItem, ChatItemPatch, UsageView } from '../../src/shared/protocol';
@@ -66,5 +66,33 @@ export class FakeHost implements AgentHost {
     this.reviews.push(set);
     if (signal.aborted) return { decisions: {} };
     return this.reviewer(set, this.reviews.length);
+  }
+
+  /** Every command the user was asked about, in order. */
+  commandRequests: CommandRequest[] = [];
+  /** Decides each command. Defaults to denying, so a test must opt in to running. */
+  approver: (request: CommandRequest, count: number) => CommandDecision | Promise<CommandDecision> = () => 'deny';
+  remembered = new Set<string>();
+  commandTimeoutMs = 10_000;
+  diagnostics: DiagnosticSummary | null = null;
+  diagnosticRequests: string[][] = [];
+
+  async approveCommand(request: CommandRequest, signal: AbortSignal): Promise<CommandDecision> {
+    this.commandRequests.push(request);
+    if (signal.aborted) return 'deny';
+    return this.approver(request, this.commandRequests.length);
+  }
+
+  isCommandRemembered(command: string): boolean {
+    return this.remembered.has(command);
+  }
+
+  async rememberCommand(command: string): Promise<void> {
+    this.remembered.add(command);
+  }
+
+  async getDiagnostics(paths: string[]): Promise<DiagnosticSummary | null> {
+    this.diagnosticRequests.push(paths);
+    return this.diagnostics;
   }
 }

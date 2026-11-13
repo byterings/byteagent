@@ -109,6 +109,11 @@
         "category": "ByteAgent"
       },
       {
+        "command": "byteagent.resetCommandApprovals",
+        "title": "Forget Always-Allowed Commands",
+        "category": "ByteAgent"
+      },
+      {
         "command": "byteagent.showLogs",
         "title": "Show Logs",
         "category": "ByteAgent"

@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { AgentEvents, AgentHost } from '../agent/host';
+import type { AgentEvents, AgentHost, CommandDecision, CommandRequest, DiagnosticSummary } from '../agent/host';
 import type { ChangeIO, ChangeSet, ReviewDecision } from '../changes/types';
 import { ChangeReviewService } from '../changes/vscodeReview';
 import { AgentRuntime } from '../agent/runtime';
@@ -37,6 +37,8 @@ interface PromptInput {
 }
 
 const MAX_TURNS = 40;
+const REMEMBERED_COMMANDS_KEY = 'byteagent.rememberedCommands';
+const DIAGNOSTICS_SETTLE_MS = 700;
 const DELTA_FLUSH_MS = 24;
 
 /**
@@ -213,6 +215,55 @@ export class ChatController implements AgentEvents, AgentHost {
     return this.ask<boolean>(requestId, signal, false);
   }
 
+  approveCommand(request: CommandRequest, signal: AbortSignal): Promise<CommandDecision> {
+    // Stopping the run answers "deny".
+    return this.ask<CommandDecision>(request.requestId, signal, 'deny');
+  }
+
+  isCommandRemembered(command: string): boolean {
+    return this.rememberedCommands().includes(command);
+  }
+
+  async rememberCommand(command: string): Promise<void> {
+    const list = this.rememberedCommands();
+    if (list.includes(command)) return;
+    await this.services.context.workspaceState.update(REMEMBERED_COMMANDS_KEY, [...list, command].slice(-200));
+    this.services.logger.info(`Command will be allowed without asking in this workspace: ${command}`);
+  }
+
+  /** Commands the user chose to always allow in this workspace. */
+  rememberedCommands(): string[] {
+    const stored = this.services.context.workspaceState.get<unknown>(REMEMBERED_COMMANDS_KEY);
+    return Array.isArray(stored) ? stored.filter((c): c is string => typeof c === 'string') : [];
+  }
+
+  async forgetCommands(): Promise<void> {
+    await this.services.context.workspaceState.update(REMEMBERED_COMMANDS_KEY, undefined);
+  }
+
+  get commandTimeoutMs(): number {
+    return this.services.settings().settings.commandTimeoutSeconds * 1000;
+  }
+
+  async getDiagnostics(paths: string[]): Promise<DiagnosticSummary | null> {
+    const root = workspaceRoot();
+    if (!root || paths.length === 0) return null;
+    // Language services need a moment to look at files that just changed.
+    await new Promise((resolve) => setTimeout(resolve, DIAGNOSTICS_SETTLE_MS));
+    let errors = 0;
+    let warnings = 0;
+    const files: string[] = [];
+    for (const relative of paths) {
+      const uri = vscode.Uri.file(path.join(root, ...relative.split('/')));
+      const found = vscode.languages.getDiagnostics(uri);
+      const fileErrors = found.filter((d) => d.severity === vscode.DiagnosticSeverity.Error).length;
+      errors += fileErrors;
+      warnings += found.filter((d) => d.severity === vscode.DiagnosticSeverity.Warning).length;
+      if (fileErrors > 0) files.push(relative);
+    }
+    return { errors, warnings, files };
+  }
+
   reviewChanges(changeSet: ChangeSet, signal: AbortSignal): Promise<ReviewDecision> {
     this.review.remember(changeSet);
     // Stopping the run answers with no accepted files.
@@ -310,6 +361,13 @@ export class ChatController implements AgentEvents, AgentHost {
         if (feedback) for (const id of Object.keys(decisions)) decisions[id] = 'reject';
         if (!this.answer(message.changeSetId, { decisions, feedback } satisfies ReviewDecision)) {
           this.post({ type: 'toast', level: 'warn', message: 'That proposal is no longer waiting for review.' });
+        }
+        return;
+      }
+      case 'commandDecision': {
+        const decision: CommandDecision = message.decision === 'once' || message.decision === 'always' ? message.decision : 'deny';
+        if (!this.answer(message.requestId, decision)) {
+          this.post({ type: 'toast', level: 'warn', message: 'That command is no longer waiting for approval.' });
         }
         return;
       }

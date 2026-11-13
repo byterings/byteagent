@@ -63,7 +63,7 @@ IDs map to milestones in `DEVELOPMENT_PLAN.md`: `R-00N` is Milestone N.
   with timeout, cancellation and redaction, structured verification
   evidence.
 - Priority: High
-- Status: pending
+- Status: done
 
 ### R-006
 - Title: Adaptive execution policy

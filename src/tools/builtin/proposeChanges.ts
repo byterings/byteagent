@@ -146,6 +146,7 @@ export const proposeChangesTool: ToolDefinition<ProposeArgs> = {
       }),
     });
 
+    if (results.some((r) => r.status === 'applied')) context.record.lastAppliedAt = context.record.sequence++;
     for (const r of results) {
       if (r.status === 'applied') context.record.applied.push(r.path);
       else if (r.status === 'rejected') context.record.rejected.push(r.path);
