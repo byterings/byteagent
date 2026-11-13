@@ -30,7 +30,7 @@ IDs map to milestones in `DEVELOPMENT_PLAN.md`: `R-00N` is Milestone N.
   sidebar chat entry point, commands, validated settings, API keys in
   SecretStorage, structured errors, redacted logging.
 - Priority: High
-- Status: pending
+- Status: done
 
 ### R-002
 - Title: Provider contract and streaming chat

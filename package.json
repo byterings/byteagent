@@ -1,0 +1,329 @@
+{
+  "name": "byteagent",
+  "displayName": "ByteAgent",
+  "description": "A provider-agnostic AI coding agent. Bring your own API key, review every change before it is applied.",
+  "version": "0.1.0",
+  "publisher": "byteagent",
+  "private": true,
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/byterings/byteagent.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "coding assistant",
+    "openai compatible",
+    "chat"
+  ],
+  "icon": "media/icon.png",
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "ByteAgent reads project files and can run approved commands, so it requires a trusted workspace."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "ByteAgent currently works with local folders only."
+    }
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "byteagent",
+          "title": "ByteAgent",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "byteagent": [
+        {
+          "type": "webview",
+          "id": "byteagent.chat",
+          "name": "Chat",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "byteagent.openChat",
+        "title": "Open Chat",
+        "category": "ByteAgent",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "byteagent.newChat",
+        "title": "New Chat",
+        "category": "ByteAgent",
+        "icon": "$(add)"
+      },
+      {
+        "command": "byteagent.showHistory",
+        "title": "Chat History",
+        "category": "ByteAgent",
+        "icon": "$(history)"
+      },
+      {
+        "command": "byteagent.openSettings",
+        "title": "Provider Settings",
+        "category": "ByteAgent",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "byteagent.setApiKey",
+        "title": "Set API Key",
+        "category": "ByteAgent"
+      },
+      {
+        "command": "byteagent.clearApiKey",
+        "title": "Remove API Key",
+        "category": "ByteAgent"
+      },
+      {
+        "command": "byteagent.testConnection",
+        "title": "Test Provider Connection",
+        "category": "ByteAgent"
+      },
+      {
+        "command": "byteagent.initProject",
+        "title": "Set Up Project Knowledge",
+        "category": "ByteAgent"
+      },
+      {
+        "command": "byteagent.addSelectionToChat",
+        "title": "Add Selection to Chat",
+        "category": "ByteAgent"
+      },
+      {
+        "command": "byteagent.showLogs",
+        "title": "Show Logs",
+        "category": "ByteAgent"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "byteagent.newChat",
+          "when": "view == byteagent.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "byteagent.showHistory",
+          "when": "view == byteagent.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "byteagent.openSettings",
+          "when": "view == byteagent.chat",
+          "group": "navigation@3"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "byteagent.addSelectionToChat",
+          "when": "editorHasSelection",
+          "group": "byteagent@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "byteagent.openChat",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b"
+      },
+      {
+        "command": "byteagent.addSelectionToChat",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l",
+        "when": "editorHasSelection"
+      }
+    ],
+    "configuration": {
+      "title": "ByteAgent",
+      "properties": {
+        "byteagent.providers": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Provider profiles. Use **ByteAgent: Provider Settings** to edit these. API keys are stored separately in VS Code's secret storage and never appear here.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "baseUrl",
+              "model"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable identifier for this profile."
+              },
+              "name": {
+                "type": "string",
+                "description": "Display name."
+              },
+              "baseUrl": {
+                "type": "string",
+                "description": "Base URL of an OpenAI-compatible API, for example https://api.openai.com/v1"
+              },
+              "model": {
+                "type": "string",
+                "description": "Model name sent to the provider."
+              },
+              "temperature": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 2,
+                "description": "Sampling temperature. Leave unset to use the provider default."
+              },
+              "maxOutputTokens": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum tokens in one response. Leave unset to use the provider default."
+              },
+              "contextWindow": {
+                "type": "integer",
+                "minimum": 1000,
+                "description": "The model's context window in tokens, when known."
+              },
+              "timeoutSeconds": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 600,
+                "description": "Seconds to wait for the provider to start responding."
+              },
+              "toolCalling": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "native",
+                  "text"
+                ],
+                "description": "How tools are sent. 'auto' tries native tool calling and falls back to a text protocol."
+              }
+            }
+          }
+        },
+        "byteagent.activeProvider": {
+          "type": "string",
+          "default": "",
+          "description": "The id of the provider profile in use."
+        },
+        "byteagent.agent.defaultMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "quick",
+            "standard",
+            "project"
+          ],
+          "default": "auto",
+          "enumDescriptions": [
+            "ByteAgent chooses the depth for each request.",
+            "Always use minimal context and no formal plan.",
+            "Always inspect related files and make a short plan.",
+            "Always plan, track and verify in steps."
+          ],
+          "description": "Execution depth for new requests. Review and approval rules are the same in every mode."
+        },
+        "byteagent.context.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra glob patterns (gitignore syntax) that ByteAgent must never read or send, in addition to `.gitignore` and the built-in sensitive-file rules."
+        },
+        "byteagent.context.maxFileSizeKb": {
+          "type": "integer",
+          "default": 512,
+          "minimum": 1,
+          "maximum": 10240,
+          "description": "Files larger than this are not read or indexed."
+        },
+        "byteagent.context.defaultContextWindow": {
+          "type": "integer",
+          "default": 32000,
+          "minimum": 2000,
+          "description": "Context window in tokens to assume when a provider profile does not specify one."
+        },
+        "byteagent.context.confirmBeforeSend": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show the list of files and ask for confirmation before each request is sent to the provider."
+        },
+        "byteagent.commands.timeoutSeconds": {
+          "type": "integer",
+          "default": 120,
+          "minimum": 5,
+          "maximum": 3600,
+          "description": "Maximum time an approved command may run."
+        },
+        "byteagent.logLevel": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warn",
+            "info",
+            "debug"
+          ],
+          "default": "info",
+          "description": "Detail level for the ByteAgent output channel. Secrets are always redacted."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "npm run build:ext && npm run build:webview",
+    "build:ext": "node scripts/build.mjs",
+    "build:webview": "vite build --config webview/vite.config.mts",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p webview/tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:extension": "npm run build && node scripts/build.mjs --tests && node tests/extension/runTests.cjs",
+    "check": "npm run typecheck && npm run test",
+    "package": "npm run build && vsce package --no-dependencies",
+    "vscode:prepublish": "npm run build",
+    "build:harness": "vite build --config webview/vite.harness.config.mts"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.19.43",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/sql.js": "^1.4.11",
+    "@types/vscode": "^1.90.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.9.2",
+    "diff": "^9.0.0",
+    "dompurify": "^3.4.17",
+    "esbuild": "^0.28.2",
+    "highlight.js": "^11.12.0",
+    "ignore": "^7.0.14",
+    "marked": "^18.2.0",
+    "mocha": "^12.0.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "sql.js": "^1.16.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^4.1.12"
+  }
+}

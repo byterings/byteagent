@@ -1,0 +1,6 @@
+{
+  "name": "fixture-app",
+  "version": "1.0.0",
+  "scripts": { "test": "node test.js" },
+  "dependencies": { "express": "^4.0.0" }
+}
