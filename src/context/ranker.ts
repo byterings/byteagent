@@ -1,6 +1,7 @@
 import type { Attachment } from '../shared/protocol';
 import { baseName } from './paths';
 import { searchText } from './search';
+import type { SymbolIndex } from './symbols';
 import type { WorkspaceIndex } from './workspaceIndex';
 
 export interface RankRequest {
@@ -12,6 +13,8 @@ export interface RankRequest {
   contentSearch: boolean;
   ripgrepPath?: string;
   signal?: AbortSignal;
+  /** Declared names in the workspace. Optional: ranking works without it. */
+  symbols?: SymbolIndex;
 }
 
 export interface RankedFile {
@@ -105,6 +108,15 @@ function definitionPattern(name: string, ignoreCase = false): RegExp | undefined
   );
 }
 
+/** The request's meaningful words, in order, for phrase matching. */
+function contentWords(prompt: string): string[] {
+  return prompt
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 2 && !STOPWORDS.has(w) && !/^\d+$/.test(w))
+    .slice(0, 24);
+}
+
 function isTestFile(path: string): boolean {
   return /(^|\/)(tests?|__tests__|spec)\//.test(path) || /[._-](test|spec)\.[a-z0-9]+$/i.test(path) || /(^|\/)test_[^/]+$/.test(path);
 }
@@ -193,6 +205,36 @@ export async function rankFiles(index: WorkspaceIndex, request: RankRequest): Pr
     }
   }
 
+  // 3b. Declarations whose name matches a term or a phrase of the request.
+  const definedIn = new Set<string>();
+  if (request.symbols) {
+    await request.symbols.update();
+    const define = (path: string, name: string, line: number, score: number, reason: string): void => {
+      if (!index.has(path)) return;
+      const key = `${path}|${name.toLowerCase()}`;
+      if (definedIn.has(key)) return;
+      definedIn.add(key);
+      bump(path, score, reason, line);
+    };
+    for (const term of [...terms.strong, ...terms.weak.filter((t) => t.length >= 4)]) {
+      for (const match of request.symbols.find(term).slice(0, 6)) define(match.path, match.name, match.line, 60, `defines "${match.name}"`);
+    }
+    // "order total" finds orderTotal and order_total; "user profile" finds getUserProfile.
+    const words = contentWords(request.prompt);
+    for (let size = 3; size >= 2; size--) {
+      for (let i = 0; i + size <= words.length; i++) {
+        const phrase = words.slice(i, i + size);
+        const exact = request.symbols.find(phrase.join(''));
+        for (const match of exact.slice(0, 6)) define(match.path, match.name, match.line, 55, `defines "${match.name}"`);
+        if (exact.length === 0) {
+          for (const match of request.symbols.findContaining(phrase.join(''), 6)) {
+            define(match.path, match.name, match.line, 24, `"${match.name}" matches "${phrase.join(' ')}"`);
+          }
+        }
+      }
+    }
+  }
+
   // 4. File contents that mention the terms.
   if (request.contentSearch) {
     const searches: Array<{ term: string; weight: number }> = [
@@ -212,7 +254,10 @@ export async function rankFiles(index: WorkspaceIndex, request: RankRequest): Pr
       for (const match of result.matches) {
         const count = (perFile.get(match.path) ?? 0) + 1;
         perFile.set(match.path, count);
-        if (definition?.test(match.text)) bump(match.path, 60, `defines "${term}"`, match.line);
+        if (definition?.test(match.text)) {
+          // Already credited through the symbol index: do not count it twice.
+          if (!definedIn.has(`${match.path}|${term.toLowerCase()}`)) bump(match.path, 60, `defines "${term}"`, match.line);
+        }
         else if (count <= 5) bump(match.path, weight, `mentions "${term}"`, match.line);
       }
       // A term found in very many files says little about any one of them.

@@ -585,7 +585,7 @@ export class ChatController implements AgentEvents, AgentHost {
       events: this,
       host: this,
       logger: this.services.logger,
-      workspace: index ? { index, ripgrepPath: workspace.ripgrepPath } : undefined,
+      workspace: index ? { index, ripgrepPath: workspace.ripgrepPath, symbols: workspace.symbols } : undefined,
       tools: this.tools,
       tasks: this.tasks,
       limits: { defaultContextWindow: settings.defaultContextWindow, confirmBeforeSend: settings.confirmBeforeSend },
@@ -720,8 +720,7 @@ export class ChatController implements AgentEvents, AgentHost {
           this.services.logger.info(`Project database moved to ${this.store.path}`);
         }
         if (this.store && record.applied.length > 0) {
-          await index.refresh();
-          this.store.saveFiles(index.files().map((f) => ({ path: f.path, size: f.size, mtimeMs: f.mtimeMs, ext: f.ext })));
+          await this.saveIndexSnapshot();
           this.store.setMeta('onboarded_at', String(Date.now()));
           this.store.recordEvent({ sessionId: session.id, type: 'onboarding', data: { created: record.applied, kept: plan.kept, kind: plan.baseline.kind } });
         }
@@ -731,6 +730,24 @@ export class ChatController implements AgentEvents, AgentHost {
         await this.pushState();
       }
     });
+  }
+
+  /** Stores the current file list and declared names in the project database. */
+  private async saveIndexSnapshot(): Promise<void> {
+    const workspace = this.services.workspace;
+    const index = workspace.index;
+    if (!index || !this.store) return;
+    try {
+      await index.refresh();
+      this.store.saveFiles(index.files().map((f) => ({ path: f.path, size: f.size, mtimeMs: f.mtimeMs, ext: f.ext })));
+      const symbols = workspace.symbols;
+      if (symbols) {
+        await symbols.update();
+        for (const entry of symbols.entries()) this.store.replaceSymbols(entry.path, entry.symbols);
+      }
+    } catch (err) {
+      this.services.logger.warn('Could not store the file index', err);
+    }
   }
 
   /** Continues a saved task in a fresh conversation, with whichever provider is active now. */

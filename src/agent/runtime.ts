@@ -1,4 +1,5 @@
 import { buildContext, computeContextBudget, type ContextPackage } from '../context/contextBuilder';
+import type { SymbolIndex } from '../context/symbols';
 import type { WorkspaceIndex } from '../context/workspaceIndex';
 import type { ChatMessage, FinishReason, Provider, ToolCall, ToolSpec } from '../providers/types';
 import { describeError, isCancellation, ProviderError } from '../shared/errors';
@@ -49,6 +50,7 @@ export interface RunResult {
 export interface WorkspaceAccess {
   index: WorkspaceIndex;
   ripgrepPath?: string;
+  symbols?: SymbolIndex;
 }
 
 export interface RuntimeLimits {
@@ -504,6 +506,7 @@ export class AgentRuntime {
       budgetTokens,
       ripgrepPath: workspace.ripgrepPath,
       signal,
+      symbols: workspace.symbols,
     });
 
     const itemId = newId('x');

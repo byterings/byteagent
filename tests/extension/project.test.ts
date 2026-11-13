@@ -127,6 +127,7 @@ describe('M7 project knowledge, persistence and resume', () => {
     await store.flush();
     assert.ok(existsSync(file('.byteagent/agent.db')));
     assert.ok(store.fileCount() > 0, 'file index stored');
+    assert.deepStrictEqual(store.findSymbols('multiply').map((sym) => [sym.path, sym.kind]), [['src/math.js', 'function']], 'declared names stored');
     assert.strictEqual((await api.controller.buildState()).projectInitialized, true);
 
     const outcome = items().find((i) => i.kind === 'outcome');

@@ -382,14 +382,55 @@ Not verified:
 - Database size and speed with thousands of tasks or a very large file
   index were not measured.
 
+### R-008 Indexing improvements (light)
+- Status: done
+
+Files Changed:
+- src/context/ (symbols, ranker, contextBuilder, workspaceIndex)
+- src/agent/runtime.ts, src/chat/ (workspaceService, controller)
+- tests/unit/symbols.test.ts, tests/perf/retrieval.test.ts
+
+What Changed:
+- Incremental index updates: a file event updates one path instead of
+  rescanning the workspace.
+- Line-pattern symbol extraction for TypeScript, JavaScript, Python, Go,
+  Rust, Java-style languages, Ruby, PHP and C-style languages, with an
+  index that re-reads only changed files.
+- Ranking uses declared names, including phrases written in plain words
+  ("order total" finds `calculateOrderTotal`).
+
+Measured (2026-11-13, this machine, `tests/perf/retrieval.test.ts`):
+- Retrieval on an 18-query set over a 61-file sample project: correct
+  file ranked first 15 of 18 without the symbol index, 18 of 18 with it;
+  mean reciprocal rank 0.833 to 1.000.
+- 3,000 files: full rescan after one change 197 ms; incremental update
+  of one path under 1 ms.
+- 3,000 files: first symbol build 1,181 ms (6,000 symbols); update after
+  two changed files 20 ms.
+
+Not verified:
+- The query set and sample project were written for this measurement.
+  They show the gap the change addresses; they do not prove the same gain
+  on a real repository.
+- Symbol extraction uses line patterns, not a parser. It misses unusual
+  declaration styles and was not checked against large real code bases.
+- The stored symbols are a snapshot taken at project setup; ranking uses
+  the live in-memory index.
+
+Not built (deferred as R-009): Tree-sitter parsing, dependency graph,
+embeddings, semantic search, native provider adapters.
+
 ---
 
 ## In Progress
-- R-008 Indexing improvements (light)
+None
 
 ---
 
 ## Pending
+- R-010 Release readiness (needs the product owner): live-provider
+  testing, licence terms, third-party licence review, Marketplace
+  publisher.
 
 ---
 

@@ -85,7 +85,7 @@ IDs map to milestones in `DEVELOPMENT_PLAN.md`: `R-00N` is Milestone N.
 - Description: Incremental index updates and lightweight symbol
   extraction, each with a measured before/after comparison.
 - Priority: Low
-- Status: pending
+- Status: done
 
 ### R-009
 - Title: Advanced indexing

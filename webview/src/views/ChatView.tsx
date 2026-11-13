@@ -96,6 +96,21 @@ export function ChatView() {
                     ))}
                   </div>
                 )}
+                {app.tasks.length > 0 && (
+                  <div className="suggestions">
+                    {app.tasks.slice(0, 2).map((task) => (
+                      <button key={task.id} className="suggestion" onClick={() => post({ type: 'resumeTask', taskId: task.id })} title="Continue this unfinished task">
+                        <Icon name="play" />
+                        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          Resume: {task.title}
+                        </span>
+                        <span className="hint" style={{ marginLeft: 'auto', flex: 'none' }}>
+                          {task.stepsDone}/{task.stepsTotal}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {app.hasWorkspace && !app.projectInitialized && (
                   <button className="link" style={{ marginTop: 10 }} onClick={() => post({ type: 'initProject' })}>
                     <Icon name="sparkle" size={12} /> Set up project knowledge

@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { PathPolicy } from '../context/ignore';
 import { toPosix } from '../context/paths';
 import { findRipgrep } from '../context/search';
+import { SymbolIndex } from '../context/symbols';
 import { detectProject, summarizeFacts } from '../context/techDetect';
 import { WorkspaceIndex } from '../context/workspaceIndex';
 import type { EditorContext } from '../shared/protocol';
@@ -18,7 +19,7 @@ const RULES_TOKEN_LIMIT = 1500;
  */
 export class WorkspaceService implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
-  private current: { root: string; index: WorkspaceIndex; policy: PathPolicy } | undefined;
+  private current: { root: string; index: WorkspaceIndex; policy: PathPolicy; symbols: SymbolIndex } | undefined;
   private signature = '';
   private facts: { at: number; text: string } | undefined;
   private selectionTimer: ReturnType<typeof setTimeout> | undefined;
@@ -65,11 +66,16 @@ export class WorkspaceService implements vscode.Disposable {
         maxFileSizeBytes: settings.maxFileSizeKb * 1024,
         overlay: (relative) => this.unsavedText(root, relative),
       });
-      this.current = { root, index, policy };
+      this.current = { root, index, policy, symbols: new SymbolIndex(index) };
       this.signature = signature;
       this.facts = undefined;
     }
     return this.current.index;
+  }
+
+  /** Declared names in the workspace, kept in step with the index. */
+  get symbols(): SymbolIndex | undefined {
+    return this.index ? this.current?.symbols : undefined;
   }
 
   get ripgrepPath(): string | undefined {

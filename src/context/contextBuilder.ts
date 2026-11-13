@@ -3,6 +3,7 @@ import type { Attachment, ExecutionMode } from '../shared/protocol';
 import { estimateTokens, truncateToTokens } from '../shared/tokens';
 import { describeBlock, type BlockReason } from './ignore';
 import { rankFiles, type RankedFile } from './ranker';
+import type { SymbolIndex } from './symbols';
 import type { WorkspaceIndex } from './workspaceIndex';
 
 export interface ContextRequest {
@@ -15,6 +16,7 @@ export interface ContextRequest {
   budgetTokens: number;
   ripgrepPath?: string;
   signal?: AbortSignal;
+  symbols?: SymbolIndex;
 }
 
 export interface ContextFile {
@@ -164,6 +166,7 @@ export async function buildContext(index: WorkspaceIndex, request: ContextReques
       contentSearch: true,
       ripgrepPath: request.ripgrepPath,
       signal: request.signal,
+      symbols: request.symbols,
     });
   } catch (err) {
     if (err instanceof ByteAgentError && err.code === 'cancelled') throw err;
